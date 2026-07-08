@@ -1,4 +1,4 @@
-// SPEC-MANAGED: projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
+// SPEC-MANAGED: apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
 // HANDWRITE-BEGIN gap="missing-generator:config:1758bf38" tracker="pending-tracker" reason="RelayCoreConfig per the Config contract."
 //! In-process broker core engine settings.
 //!
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 /// Durability flush policy for the on-disk log segments.
 ///
-/// @spec projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
+/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FsyncPolicy {
@@ -30,7 +30,7 @@ impl Default for FsyncPolicy {
 
 /// Idempotent at-least-once append window: how long a `MessageId` is remembered.
 ///
-/// @spec projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
+/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DedupeConfig {
     /// `MessageId`s retained per shard for duplicate detection.
@@ -51,15 +51,25 @@ impl Default for DedupeConfig {
 /// Work-queue / competing-consumer delivery settings (standard at-least-once
 /// lease / retry semantics).
 ///
-/// @spec projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
+/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkQueueConfig {
     /// Lease duration before an unacked entry is redelivery-eligible.
     pub lease_ttl_ms: u64,
-    /// Redelivery attempts before revocation / dead-letter.
+    /// Redelivery attempts before an entry is dead-lettered. `0` disables
+    /// dead-lettering (entries redeliver indefinitely).
     pub max_attempts: u32,
     /// Base backoff between delivery attempts.
     pub redeliver_backoff_ms: u64,
+    /// Suffix of the sibling subject an exhausted entry is routed to
+    /// (`{subject}{dlq_suffix}`). Subjects ending in this suffix are opened with
+    /// `max_attempts = 0` so dead-lettering never recurses.
+    #[serde(default = "default_dlq_suffix")]
+    pub dlq_suffix: String,
+}
+
+fn default_dlq_suffix() -> String {
+    ".dlq".to_string()
 }
 
 impl Default for WorkQueueConfig {
@@ -68,35 +78,23 @@ impl Default for WorkQueueConfig {
             lease_ttl_ms: 30_000,
             max_attempts: 5,
             redeliver_backoff_ms: 1_000,
+            dlq_suffix: default_dlq_suffix(),
         }
     }
 }
 
-/// Broadcast / fan-out delivery settings (replayable from any retained seq).
+/// Retention of the durable log. relay is delete-on-ack: a segment is reclaimed
+/// once every entry in it is acked (the committed watermark passes it), so
+/// storage tracks **backlog depth**, not total throughput. An un-acked backlog
+/// is never deleted — the broker owns task durability until ack. (`max_*` below
+/// are reserved for a future hard-cap/backpressure knob; they do not prune.)
 ///
-/// @spec projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BroadcastConfig {
-    /// `0` = replay from any retained seq; `>0` caps replay depth.
-    pub max_replay_entries: u64,
-}
-
-impl Default for BroadcastConfig {
-    fn default() -> Self {
-        BroadcastConfig {
-            max_replay_entries: 0,
-        }
-    }
-}
-
-/// Retention / pruning of the durable log.
-///
-/// @spec projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
+/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetentionConfig {
-    /// Prune fully-acked / aged segments after this many seconds.
+    /// Reserved (future hard cap); does not prune un-acked entries.
     pub max_age_secs: u64,
-    /// `0` = unbounded; else prune oldest segments past this size.
+    /// Reserved (future hard cap); does not prune un-acked entries.
     pub max_bytes_per_shard: u64,
 }
 
@@ -111,7 +109,7 @@ impl Default for RetentionConfig {
 
 /// Engine configuration for the in-process relay core.
 ///
-/// @spec projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
+/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RelayCoreConfig {
@@ -129,7 +127,6 @@ pub struct RelayCoreConfig {
     pub default_shards: u32,
     pub dedupe: DedupeConfig,
     pub work_queue: WorkQueueConfig,
-    pub broadcast: BroadcastConfig,
     pub retention: RetentionConfig,
 }
 
@@ -146,7 +143,6 @@ impl Default for RelayCoreConfig {
             default_shards: 1,
             dedupe: DedupeConfig::default(),
             work_queue: WorkQueueConfig::default(),
-            broadcast: BroadcastConfig::default(),
             retention: RetentionConfig::default(),
         }
     }

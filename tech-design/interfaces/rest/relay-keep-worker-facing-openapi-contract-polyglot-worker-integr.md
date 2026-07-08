@@ -76,7 +76,7 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: projects/relay/tests/worker_loop.rs
+  - path: apps/relay/tests/worker_loop.rs
     action: create
     section: unit-test
     impl_mode: hand-written

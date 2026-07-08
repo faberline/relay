@@ -1,4 +1,4 @@
-// SPEC-MANAGED: projects/relay/tech-design/logic/work-queue-throughput-per-shard-lock-o-1-lease-cursor-batch-leas.md#unit-test
+// SPEC-MANAGED: apps/relay/tech-design/logic/work-queue-throughput-per-shard-lock-o-1-lease-cursor-batch-leas.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:b4ef76e5" tracker="pending-tracker" reason="Tests: O(1) cursor ordering, prefer-redeliver, committed watermark, lease-batch/ack-batch, and per-subject concurrency isolation."
 //! Work-queue throughput rework (#128): O(1) cursor ordering, prefer-redeliver,
 //! committed watermark, batch lease/ack, and per-subject concurrency isolation.
@@ -11,7 +11,9 @@ use chrono::{Duration, Utc};
 use relay::{Relay, RelayCoreConfig};
 
 fn relay() -> Relay {
-    Relay::new(RelayCoreConfig::in_memory())
+    let mut c = RelayCoreConfig::in_memory();
+    c.work_queue.redeliver_backoff_ms = 0; // pin immediate redelivery for throughput ordering
+    Relay::new(c)
 }
 
 fn publish(r: &Relay, subject: &str, n: usize) {

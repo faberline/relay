@@ -1,7 +1,7 @@
-# SPEC-MANAGED: projects/relay/external-contracts/security-hardening/security/security-evidence.md#relay-guard-security
+# SPEC-MANAGED: apps/relay/external-contracts/security-hardening/security/security-evidence.md#relay-guard-security
 # CODEGEN-BEGIN
 # AW-EC-TOOL-BEGIN
-delegate_command = "cd projects/relay && ../../target/debug/vat run guard-security"
+delegate_command = "cd apps/relay && ../../target/debug/vat run guard-security"
 project = "relay"
 source_contract = "relay-security-hardening-guard-scan"
 version = 1

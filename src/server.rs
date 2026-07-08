@@ -1,53 +1,105 @@
-// SPEC-MANAGED: projects/relay/tech-design/interfaces/rest/http-2-openapi-transport-client-side-sharding-streaming-subscrib.md#logic
+// SPEC-MANAGED: apps/relay/tech-design/interfaces/rest/http-2-openapi-transport-client-side-sharding-work-queue-consume.md#logic
 // HANDWRITE-BEGIN gap="missing-generator:logic:a8062fb3" tracker="pending-tracker" reason="axum h2c app over the relay core: publish/lease/ack handlers (JSON + CBOR) and the streaming broadcast subscribe handler."
 //! axum HTTP/2 (h2c) application over the relay core.
 //!
-//! `publish` / `lease` / `ack` / `lease-batch` / `ack-batch` are
+//! `publish` / `lease` / `ack` / `lease-batch` / `ack-batch` / `heartbeat` are
 //! request/response (JSON, plus an `application/cbor` fast path for hot calls);
-//! `subscribe` opens a long-lived HTTP/2 stream of length-prefixed CBOR
-//! [`crate::LogEntry`] frames from a seq. The core is internally synchronized
-//! (per-shard locking, #128), so the server holds it as a plain `Arc<Relay>` —
-//! no global lock.
+//! `consume` is the streaming work-queue path. The core is internally
+//! synchronized (per-shard locking, #128), so the server holds it as a plain
+//! `Arc<Relay>` — no global lock.
+//!
+//! The operational surface is the shared service shell (#1205): the standard
+//! probe routes (`/healthz` `/readyz` `/metrics` `/openapi.json` `/docs`)
+//! come from `service_http::standard_probe_routes` merged with the `/v1`
+//! data plane; error responses render the shared `{error, message}` envelope
+//! ([`service_http::ApiErr`]); per-op request metrics are recorded by
+//! [`crate::metrics::track`] on the data plane.
+//!
+//! Request auth is the shared `libs/service-auth` bearer contract (#1206):
+//! the blanket `service_auth::auth_middleware` runs on the `/v1` data plane
+//! ONLY (probes stay tokenless), injecting a [`RoleMapPrincipal`] each
+//! handler authorizes on its `{subject}` via [`crate::auth::authorize`] —
+//! publish family = write, consume family = read.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use axum::{
-    body::{Body, Bytes},
-    extract::{Path, Query, Request, State},
-    http::{header, HeaderMap, StatusCode, Uri},
-    middleware::{self, Next},
+    body::Bytes,
+    extract::{Extension, Path, State},
+    http::{header, HeaderMap, StatusCode},
+    middleware::from_fn_with_state,
     response::{IntoResponse, Response},
     routing::{get, post},
     Router,
 };
 use chrono::Utc;
+use service_auth::{Role, RoleMapPrincipal, StaticRoleMapVerifier};
+use service_http::{ApiErr, MetricsProvider};
 
 use crate::engine::Relay;
+use crate::metrics::RelayMetrics;
 use crate::server_config::RelayServerConfig;
 use crate::wire::{
     self, AckBatchRequest, AckBatchResponse, AckRequest, AckResponse, HeartbeatRequest,
     HeartbeatResponse, LeaseBatchRequest, LeaseBatchResponse, LeaseRequest, LeaseResponse,
-    PublishBatchRequest, PublishBatchResponse, PublishRequest, SubscribeQuery,
+    PublishBatchRequest, PublishBatchResponse, PublishRequest,
 };
 
-/// Shared application state: the relay core plus this shard's config.
+/// Shared application state: the relay core plus this shard's config, the
+/// per-op request metrics, the drain flag `/readyz` reports, the bearer
+/// verifier the data-plane auth layer runs (#1206), and — in replica/HA mode
+/// (#544) — the raft group the publish path proposes through.
 #[derive(Clone)]
 pub struct AppState {
     relay: Arc<Relay>,
     config: Arc<RelayServerConfig>,
-    next_sub: Arc<AtomicU64>,
+    metrics: Arc<RelayMetrics>,
+    draining: Arc<AtomicBool>,
+    verifier: Arc<StaticRoleMapVerifier>,
+    raft: Option<Arc<crate::raft::RelayRaft>>,
 }
 
 impl AppState {
-    /// Build state with a fresh relay core from `config`.
+    /// Build state with a fresh relay core from `config`. Auth is open
+    /// (tokenless — the `RELAY_AUTH=off` default); production serving builds
+    /// through [`AppState::with_auth`].
     pub fn new(config: RelayServerConfig) -> Self {
         let relay = Relay::new(config.core.clone());
         AppState {
             relay: Arc::new(relay),
             config: Arc::new(config),
-            next_sub: Arc::new(AtomicU64::new(0)),
+            metrics: Arc::new(RelayMetrics::new()),
+            draining: Arc::new(AtomicBool::new(false)),
+            verifier: Arc::new(StaticRoleMapVerifier::open()),
+            raft: None,
         }
+    }
+
+    /// Build state with a resolved auth config (`--auth` /
+    /// `--token-registry-file`): the data-plane auth layer runs the registry
+    /// verifier when auth is required, the open verifier when off.
+    pub fn with_auth(config: RelayServerConfig, auth: crate::auth::AuthConfig) -> Self {
+        let mut state = AppState::new(config);
+        state.verifier = Arc::new(auth.verifier());
+        state
+    }
+
+    /// The bearer verifier the data-plane auth middleware runs.
+    pub fn verifier(&self) -> Arc<StaticRoleMapVerifier> {
+        Arc::clone(&self.verifier)
+    }
+
+    /// Attach the raft group (replica/HA mode, #544): publish/publish-batch
+    /// propose through it instead of writing the engine directly. The group
+    /// MUST replicate into this state's engine (`relay_handle()`).
+    pub fn set_raft(&mut self, raft: Arc<crate::raft::RelayRaft>) {
+        self.raft = Some(raft);
+    }
+
+    /// The raft group, when running in replica/HA mode.
+    pub fn raft(&self) -> Option<Arc<crate::raft::RelayRaft>> {
+        self.raft.clone()
     }
 
     /// This shard's advertised config.
@@ -59,46 +111,46 @@ impl AppState {
     pub fn relay_handle(&self) -> Arc<Relay> {
         Arc::clone(&self.relay)
     }
+
+    /// The per-op request metrics `/metrics` renders.
+    pub fn metrics(&self) -> Arc<RelayMetrics> {
+        Arc::clone(&self.metrics)
+    }
+
+    /// Flip readiness to draining so `/readyz` returns 503. Called on SIGTERM
+    /// via `service_http::shutdown_with_drain`.
+    pub fn start_drain(&self) {
+        self.draining.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_draining(&self) -> bool {
+        self.draining.load(Ordering::SeqCst)
+    }
 }
 
-/// vhost-style namespace (#450): rewrite `/v1/{subject}/{op}` →
-/// `/v1/{ns}::{subject}/{op}` so every op is isolated per namespace, with no
-/// per-handler change (the engine already keys by subject string). Pure + tested.
-fn namespaced_path(path: &str, ns: &str) -> Option<String> {
-    // only safe namespace chars (path-segment safe, no collision tricks)
-    if ns.is_empty() || !ns.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
-        return None;
+/// Readiness source for the shared probe router: `/readyz` reports 503 once
+/// SIGTERM flips `start_drain`.
+impl service_http::ReadinessHook for AppState {
+    fn is_draining(&self) -> bool {
+        self.draining.load(Ordering::SeqCst)
     }
-    let rest = path.strip_prefix("/v1/")?;
-    let (subject, op) = rest.split_once('/')?;
-    Some(format!("/v1/{ns}::{subject}/{op}"))
 }
 
-/// Middleware: if `X-Relay-Namespace` is set, rewrite the request path to scope
-/// the subject to that namespace.
-async fn namespace_layer(req: Request, next: Next) -> Response {
-    let ns = req.headers().get("x-relay-namespace").and_then(|v| v.to_str().ok()).map(str::to_string);
-    let mut req = req;
-    if let Some(ns) = ns {
-        if let Some(new_path) = namespaced_path(req.uri().path(), &ns) {
-            let q = req.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
-            if let Ok(pq) = format!("{new_path}{q}").parse() {
-                let mut parts = req.uri().clone().into_parts();
-                parts.path_and_query = Some(pq);
-                if let Ok(uri) = Uri::from_parts(parts) {
-                    *req.uri_mut() = uri;
-                }
-            }
-        }
+/// Prometheus exposition for the shared `/metrics` route: relay's per-op
+/// request counts + latency (the engine exposes no aggregate gauges today).
+impl service_http::MetricsProvider for AppState {
+    fn render_metrics(&self) -> String {
+        self.metrics.render()
     }
-    next.run(req).await
 }
 
 /// Build the HTTP/2 router for the relay transport.
 ///
-/// @spec projects/relay/tech-design/interfaces/rest/http-2-openapi-transport-client-side-sharding-streaming-subscrib.md#logic
+/// @spec apps/relay/tech-design/interfaces/rest/http-2-openapi-transport-client-side-sharding-work-queue-consume.md#logic
 pub fn router(state: AppState) -> Router {
-    let app = Router::new()
+    let req_metrics = state.metrics();
+    let verifier = state.verifier();
+    let data_plane = Router::new()
         .route("/v1/{subject}/publish", post(publish))
         .route("/v1/{subject}/publish-batch", post(publish_batch))
         // Streaming work-queue consume (#449) — the primary consume path, listed
@@ -119,37 +171,42 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/{subject}/lease-batch", post(lease_batch)) // DEPRECATED → /consume
         .route("/v1/{subject}/ack-batch", post(ack_batch)) // DEPRECATED → /consume
         .route("/v1/{subject}/heartbeat", post(heartbeat)) // DEPRECATED → /consume
-        .route("/v1/{subject}/subscribe", get(subscribe))
         .route("/v1/{subject}/len", get(log_len))
-        .route("/healthz", get(healthz))
-        .route("/openapi.json", get(openapi_json))
-        .with_state(state);
-    // vhost-style namespace isolation (#450): the namespace middleware must run
-    // BEFORE routing so the rewritten subject is the one matched + captured. A
-    // `.layer` on `app` runs *after* path-param capture, so wrap `app` as the
-    // fallback of an outer router whose layer runs first.
-    Router::new().fallback_service(app).layer(middleware::from_fn(namespace_layer))
-}
+        // Admin surface (#1209): a consistent snapshot of the live engine
+        // state for `relay backup`. Inside the auth layer (unlike probes) —
+        // the handler requires Role::Admin on `*` (lumen's guard).
+        .route("/admin/backup", get(admin_backup))
+        // Shared bearer auth (#1206) on the data plane ONLY — probes stay
+        // tokenless. The blanket middleware authenticates (401 on a
+        // missing/unknown token when required) and injects the
+        // RoleMapPrincipal each handler authorizes on its {subject}.
+        .route_layer(from_fn_with_state(
+            verifier,
+            service_auth::auth_middleware::<StaticRoleMapVerifier>,
+        ))
+        // Per-op request metrics (counts + latency). route_layer => only for
+        // matched data-plane routes, and MatchedPath is populated. Added
+        // after (= outside) the auth layer so rejected requests are still
+        // counted.
+        .route_layer(from_fn_with_state(req_metrics, crate::metrics::track))
+        .with_state(state.clone());
 
-#[cfg(test)]
-mod ns_tests {
-    use super::namespaced_path;
+    // Standard probes (`/healthz`, `/readyz`, `/metrics`, `/openapi.json`,
+    // `/docs`) come from the shared service shell so the operational surface
+    // matches every other service; the hand-rolled healthz/openapi_json
+    // handlers are gone. AppState supplies readiness + Prometheus metrics;
+    // `/readyz` reports 503 while draining.
+    let probe_state = Arc::new(state);
+    let metrics: Arc<dyn MetricsProvider> = probe_state.clone();
+    let probes =
+        service_http::standard_probe_routes(probe_state, Some(metrics), crate::openapi::openapi);
 
-    #[test]
-    fn namespace_rewrites_subject_segment_only() {
-        assert_eq!(
-            namespaced_path("/v1/myq/consume", "tenant1").as_deref(),
-            Some("/v1/tenant1::myq/consume")
-        );
-        assert_eq!(
-            namespaced_path("/v1/loom.completions.3/publish", "a").as_deref(),
-            Some("/v1/a::loom.completions.3/publish")
-        );
-        // empty / unsafe namespaces are ignored (no rewrite)
-        assert_eq!(namespaced_path("/v1/q/consume", ""), None);
-        assert_eq!(namespaced_path("/v1/q/consume", "bad/ns"), None);
-        assert_eq!(namespaced_path("/healthz", "a"), None);
-    }
+    // relay is single-tenant per deployment (tenancy = k8s namespace); no
+    // app-level namespace rewrite. Run one relay per tenant for isolation.
+    probes
+        .merge(data_plane)
+        // One INFO-level tracing span per request — spans probes + data plane.
+        .layer(service_http::trace_layer())
 }
 
 fn wants_cbor(headers: &HeaderMap) -> bool {
@@ -184,7 +241,8 @@ fn encode_body<T: serde::Serialize>(cbor: bool, status: StatusCode, value: &T) -
             Ok(bytes) => {
                 (status, [(header::CONTENT_TYPE, "application/json")], bytes).into_response()
             }
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Err(e) => ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string())
+                .into_response(),
         }
     }
 }
@@ -198,22 +256,92 @@ fn encode_body<T: serde::Serialize>(cbor: bool, status: StatusCode, value: &T) -
 )]
 pub async fn publish(
     State(st): State<AppState>,
+    Extension(principal): Extension<RoleMapPrincipal>,
     Path(subject): Path<String>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    if let Err(deny) = crate::auth::authorize(&principal, &subject, Role::Write) {
+        return deny.into_response();
+    }
     let cbor = wants_cbor(&headers);
     let req: PublishRequest = match decode_body(cbor, &body) {
         Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return ApiErr::new(StatusCode::BAD_REQUEST, "bad_request", e).into_response(),
     };
     let now = Utc::now();
-    let result = st
-        .relay
-        .publish(&subject, &req.message_id, req.payload, req.headers, now);
+    // Resolve the optional visibility gate: explicit not_before wins, else
+    // delay_ms is a countdown from now (delayed / ETA / countdown delivery).
+    let not_before = req.not_before.or_else(|| {
+        req.delay_ms
+            .map(|ms| now + chrono::Duration::milliseconds(ms as i64))
+    });
+    // Replica/HA mode (#544): replicate the publish through raft — the host
+    // proposes locally on the leader or forwards to the leader, and returns
+    // once THIS node's engine applied it (read-your-write).
+    if let Some(raft) = st.raft() {
+        let cmd = crate::raft::PubCommand {
+            subject,
+            message_id: req.message_id,
+            payload: req.payload,
+            headers: req.headers,
+            priority: req.priority,
+            not_before,
+        };
+        return match propose_publish(&st, &raft, cmd).await {
+            Ok(outcome) => encode_body(cbor, StatusCode::OK, &outcome),
+            Err(resp) => resp,
+        };
+    }
+    let result = st.relay.publish_at(
+        &subject,
+        &req.message_id,
+        req.payload,
+        req.headers,
+        not_before,
+        req.priority,
+        now,
+    );
     match result {
         Ok(outcome) => encode_body(cbor, StatusCode::OK, &outcome),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string())
+            .into_response(),
+    }
+}
+
+/// Propose one publish through the raft group and resolve its engine outcome:
+/// normally claimed from the state machine's outcome window; if it aged out
+/// (an unclaimed backlog raced past the window) the engine's idempotent
+/// publish returns the existing `{seq, deduped}`. Raft unavailability (no
+/// leader / apply timeout) maps to 503.
+async fn propose_publish(
+    st: &AppState,
+    raft: &crate::raft::RelayRaft,
+    cmd: crate::raft::PubCommand,
+) -> Result<crate::types::AppendOutcome, Response> {
+    match raft.publish(&cmd).await {
+        Ok((_, Some(outcome))) => Ok(outcome),
+        Ok((_, None)) => st
+            .relay
+            .publish_at(
+                &cmd.subject,
+                &cmd.message_id,
+                cmd.payload,
+                cmd.headers,
+                cmd.not_before,
+                cmd.priority,
+                Utc::now(),
+            )
+            .map_err(|e| {
+                ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string())
+                    .into_response()
+            }),
+        Err(e) => Err(ApiErr::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "raft_unavailable",
+            e.to_string(),
+        )
+        .into_response()),
     }
 }
 
@@ -226,24 +354,50 @@ pub async fn publish(
 )]
 pub async fn publish_batch(
     State(st): State<AppState>,
+    Extension(principal): Extension<RoleMapPrincipal>,
     Path(subject): Path<String>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    if let Err(deny) = crate::auth::authorize(&principal, &subject, Role::Write) {
+        return deny.into_response();
+    }
     let cbor = wants_cbor(&headers);
     let req: PublishBatchRequest = match decode_body(cbor, &body) {
         Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return ApiErr::new(StatusCode::BAD_REQUEST, "bad_request", e).into_response(),
     };
     let now = Utc::now();
+    // Replica/HA mode (#544): each message is one raft command, proposed in
+    // input order (per-entry raft fsync replaces the local group commit — an
+    // accepted HA trade documented in the TD).
+    if let Some(raft) = st.raft() {
+        let mut outcomes = Vec::with_capacity(req.messages.len());
+        for m in req.messages {
+            let cmd = crate::raft::PubCommand {
+                subject: subject.clone(),
+                message_id: m.message_id,
+                payload: m.payload,
+                headers: m.headers,
+                priority: m.priority,
+                not_before: None,
+            };
+            match propose_publish(&st, &raft, cmd).await {
+                Ok(outcome) => outcomes.push(outcome),
+                Err(resp) => return resp,
+            }
+        }
+        return encode_body(cbor, StatusCode::OK, &PublishBatchResponse { outcomes });
+    }
     let messages = req
         .messages
         .into_iter()
-        .map(|m| (m.message_id, m.payload, m.headers))
+        .map(|m| (m.message_id, m.payload, m.headers, m.priority))
         .collect();
     match st.relay.publish_batch(&subject, messages, now) {
         Ok(outcomes) => encode_body(cbor, StatusCode::OK, &PublishBatchResponse { outcomes }),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string())
+            .into_response(),
     }
 }
 
@@ -256,14 +410,18 @@ pub async fn publish_batch(
 )]
 pub async fn lease(
     State(st): State<AppState>,
+    Extension(principal): Extension<RoleMapPrincipal>,
     Path(subject): Path<String>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    if let Err(deny) = crate::auth::authorize(&principal, &subject, Role::Read) {
+        return deny.into_response();
+    }
     let cbor = wants_cbor(&headers);
     let req: LeaseRequest = match decode_body(cbor, &body) {
         Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return ApiErr::new(StatusCode::BAD_REQUEST, "bad_request", e).into_response(),
     };
     let now = Utc::now();
     let lease = st
@@ -287,14 +445,18 @@ pub async fn lease(
 )]
 pub async fn ack(
     State(st): State<AppState>,
+    Extension(principal): Extension<RoleMapPrincipal>,
     Path(subject): Path<String>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    if let Err(deny) = crate::auth::authorize(&principal, &subject, Role::Read) {
+        return deny.into_response();
+    }
     let cbor = wants_cbor(&headers);
     let req: AckRequest = match decode_body(cbor, &body) {
         Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return ApiErr::new(StatusCode::BAD_REQUEST, "bad_request", e).into_response(),
     };
     let acked = st
         .relay
@@ -325,14 +487,18 @@ pub async fn ack(
 )]
 pub async fn lease_batch(
     State(st): State<AppState>,
+    Extension(principal): Extension<RoleMapPrincipal>,
     Path(subject): Path<String>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    if let Err(deny) = crate::auth::authorize(&principal, &subject, Role::Read) {
+        return deny.into_response();
+    }
     let cbor = wants_cbor(&headers);
     let req: LeaseBatchRequest = match decode_body(cbor, &body) {
         Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return ApiErr::new(StatusCode::BAD_REQUEST, "bad_request", e).into_response(),
     };
     let now = Utc::now();
     let leases = st
@@ -351,14 +517,18 @@ pub async fn lease_batch(
 )]
 pub async fn ack_batch(
     State(st): State<AppState>,
+    Extension(principal): Extension<RoleMapPrincipal>,
     Path(subject): Path<String>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    if let Err(deny) = crate::auth::authorize(&principal, &subject, Role::Read) {
+        return deny.into_response();
+    }
     let cbor = wants_cbor(&headers);
     let req: AckBatchRequest = match decode_body(cbor, &body) {
         Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return ApiErr::new(StatusCode::BAD_REQUEST, "bad_request", e).into_response(),
     };
     let acks: Vec<(String, Option<u64>)> = req
         .acks
@@ -385,14 +555,18 @@ pub async fn ack_batch(
 )]
 pub async fn heartbeat(
     State(st): State<AppState>,
+    Extension(principal): Extension<RoleMapPrincipal>,
     Path(subject): Path<String>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    if let Err(deny) = crate::auth::authorize(&principal, &subject, Role::Read) {
+        return deny.into_response();
+    }
     let cbor = wants_cbor(&headers);
     let req: HeartbeatRequest = match decode_body(cbor, &body) {
         Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return ApiErr::new(StatusCode::BAD_REQUEST, "bad_request", e).into_response(),
     };
     let now = Utc::now();
     let expires_at = st
@@ -409,57 +583,39 @@ pub async fn heartbeat(
     )
 }
 
-/// `GET /v1/{subject}/subscribe?from_seq=` — tail the broadcast stream.
+/// `GET /admin/backup` — a consistent snapshot of the live (un-acked) engine
+/// state for backup runners (#1209): the EXACT bytes
+/// [`crate::raft::RelayStateMachine`]'s raft snapshot produces
+/// ([`crate::raft::snapshot_bytes`] — `dump_live` + the applied index; 0 on a
+/// raft-less single node). A cluster-wide admin op: requires `admin` on `*`
+/// when auth is required (lumen's guard). Restore = feed the bytes to
+/// `raft::load_snapshot_bytes` on a fresh node (`load_live` merge).
 #[utoipa::path(
     get,
-    path = "/v1/{subject}/subscribe",
-    params(
-        ("subject" = String, Path, description = "Target subject"),
-        ("from_seq" = u64, Query, description = "Seq to start replay from")
-    ),
-    responses((status = 200, description = "Stream of length-prefixed CBOR log entries"))
+    path = "/admin/backup",
+    responses((status = 200, description = "EngineSnapshot JSON { up_to, subjects } — the live un-acked backlog at the applied raft index"))
 )]
-pub async fn subscribe(
+pub async fn admin_backup(
     State(st): State<AppState>,
-    Path(subject): Path<String>,
-    Query(query): Query<SubscribeQuery>,
+    Extension(principal): Extension<RoleMapPrincipal>,
 ) -> Response {
-    let subscriber_id = query
-        .subscriber_id
-        .clone()
-        .unwrap_or_else(|| format!("sub-{}", st.next_sub.fetch_add(1, Ordering::Relaxed)));
-
-    if let Err(e) = st.relay.subscribe(&subject, &subscriber_id, query.from_seq) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    if let Err(deny) = crate::auth::authorize(&principal, "*", Role::Admin) {
+        return deny.into_response();
     }
-
-    let wake = st.relay.subscribe_wake(&subject);
-    let stream = futures::stream::unfold(
-        (st, subject, subscriber_id, wake),
-        |(st, subject, subscriber_id, mut wake)| async move {
-            loop {
-                let frames = st.relay.poll(&subject, &subscriber_id).unwrap_or_default();
-                if !frames.is_empty() {
-                    let mut buf = Vec::new();
-                    for entry in &frames {
-                        buf.extend(wire::encode_frame(entry));
-                    }
-                    let item: Result<Bytes, std::convert::Infallible> = Ok(Bytes::from(buf));
-                    return Some((item, (st, subject, subscriber_id, wake)));
-                }
-                if wake.changed().await.is_err() {
-                    return None;
-                }
-            }
-        },
-    );
-
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, wire::CBOR_SEQ)],
-        Body::from_stream(stream),
-    )
-        .into_response()
+    let applied = match st.raft() {
+        Some(raft) => raft.applied_index(),
+        None => 0,
+    };
+    match crate::raft::snapshot_bytes(&st.relay, applied) {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            bytes,
+        )
+            .into_response(),
+        Err(e) => ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string())
+            .into_response(),
+    }
 }
 
 /// `GET /v1/{subject}/len` — current append count for the subject log.
@@ -469,7 +625,14 @@ pub async fn subscribe(
     params(("subject" = String, Path, description = "Target subject")),
     responses((status = 200, description = "Current log length { latest_seq }"))
 )]
-pub async fn log_len(State(st): State<AppState>, Path(subject): Path<String>) -> Response {
+pub async fn log_len(
+    State(st): State<AppState>,
+    Extension(principal): Extension<RoleMapPrincipal>,
+    Path(subject): Path<String>,
+) -> Response {
+    if let Err(deny) = crate::auth::authorize(&principal, &subject, Role::Read) {
+        return deny.into_response();
+    }
     match st.relay.log_len(&subject) {
         Ok(latest_seq) => encode_body(
             false,
@@ -478,21 +641,8 @@ pub async fn log_len(State(st): State<AppState>, Path(subject): Path<String>) ->
                 "latest_seq": latest_seq,
             }),
         ),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string())
+            .into_response(),
     }
-}
-
-async fn healthz() -> StatusCode {
-    StatusCode::OK
-}
-
-async fn openapi_json() -> Response {
-    let doc = crate::openapi::api_doc_json();
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json")],
-        doc,
-    )
-        .into_response()
 }
 // HANDWRITE-END

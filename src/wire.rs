@@ -1,18 +1,20 @@
-// SPEC-MANAGED: projects/relay/tech-design/interfaces/rest/http-2-openapi-transport-client-side-sharding-streaming-subscrib.md#schema
+// SPEC-MANAGED: apps/relay/tech-design/interfaces/rest/http-2-openapi-transport-client-side-sharding-work-queue-consume.md#schema
 // HANDWRITE-BEGIN gap="missing-generator:schema:a9efe379" tracker="pending-tracker" reason="Transport DTOs and length-prefixed CBOR framing."
 //! HTTP/2 transport wire types and framing.
 //!
-//! JSON shapes are the OpenAPI contract; hot request/response calls can use the
-//! same shapes as `application/cbor`, and the broadcast stream uses
-//! length-prefixed CBOR frames. A frame is a big-endian `u32` byte length
-//! followed by that many CBOR bytes.
+//! JSON shapes are the OpenAPI contract; hot request/response calls on the
+//! deprecated lease/ack routes can use the same shapes as `application/cbor`.
+//! `encode_frame`/`decode_frames` provide general length-prefixed CBOR framing
+//! (a big-endian `u32` byte length followed by that many CBOR bytes) for any
+//! future streaming need; the `/consume` stream uses its own JSON framing
+//! (`consume.rs`) rather than these.
 
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::types::{AppendOutcome, Lease, LogEntry, Payload, Seq};
+use crate::types::{default_priority, AppendOutcome, Lease, LogEntry, Payload, Seq};
 
 /// Publish one message to the path's subject.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +25,17 @@ pub struct PublishRequest {
     pub payload: Payload,
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
+    /// Optional work-queue visibility gate: the entry is not leasable until this
+    /// absolute time (delayed / ETA delivery).
+    #[serde(default)]
+    pub not_before: Option<DateTime<Utc>>,
+    /// Convenience countdown: deliver `delay_ms` from now. Resolved server-side to
+    /// `now + delay_ms`; if both are set, `not_before` wins.
+    #[serde(default)]
+    pub delay_ms: Option<u64>,
+    /// Work-queue priority (0 = lowest, 255 = highest; higher leases first).
+    #[serde(default = "default_priority")]
+    pub priority: u8,
 }
 
 /// Lease the next eligible entry to a competing consumer.
@@ -71,14 +84,6 @@ pub struct AckResponse {
     pub committed_seq: Option<Seq>,
 }
 
-/// Broadcast tail query; delivery starts at `from_seq`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubscribeQuery {
-    pub from_seq: Seq,
-    #[serde(default)]
-    pub subscriber_id: Option<String>,
-}
-
 /// Lease up to `max` entries in one call (work-queue throughput, #128).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LeaseBatchRequest {
@@ -120,6 +125,9 @@ pub struct PublishBatchItem {
     pub payload: Payload,
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
+    /// Work-queue priority (0 = lowest, 255 = highest; higher leases first).
+    #[serde(default = "default_priority")]
+    pub priority: u8,
 }
 
 /// Publish many messages in one durable, group-committed call.
@@ -134,10 +142,8 @@ pub struct PublishBatchResponse {
     pub outcomes: Vec<AppendOutcome>,
 }
 
-/// Content type for the CBOR fast path / stream.
+/// Content type for the CBOR fast path.
 pub const CBOR: &str = "application/cbor";
-/// Content type for the broadcast frame stream.
-pub const CBOR_SEQ: &str = "application/cbor-seq";
 
 /// Serialize `value` to CBOR bytes.
 pub fn to_cbor<T: Serialize>(value: &T) -> Vec<u8> {

@@ -1,14 +1,16 @@
-// SPEC-MANAGED: projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
+// SPEC-MANAGED: apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
 // HANDWRITE-BEGIN gap="missing-generator:logic:464901bc" tracker="pending-tracker" reason="Relay core engine tying publish -> classify -> broadcast / work-queue delivery over one durable log."
-//! The in-process relay core: a durable ordered log per `(subject, shard)`, with
-//! both broadcast fan-out and work-queue competing-consumer delivery over it.
+//! The in-process relay core: a durable ordered log per `(subject, shard)` with
+//! single-cast work-queue (competing-consumer) delivery over it. A message is
+//! leased to exactly one consumer, acked, then reclaimed (delete-on-ack). Pure
+//! pull broker — no broadcast/replay (that is `tape`), no push/ETA (that is
+//! `defer`).
 //!
 //! State is keyed by `(subject, shard)` and a subject is partitioned into
 //! `default_shards` shards (#132): `publish` routes by `crc32(message_id) %
 //! shards`, each shard has its own log / seq space / lock, so a hot subject
 //! scales across cores. `lease` scans shards; `ack` / `heartbeat` route to the
-//! owning shard; `subscribe` / `poll` span all shards. `default_shards = 1`
-//! routes everything to shard 0 and is identical to a single-shard engine.
+//! owning shard. `default_shards = 1` routes everything to shard 0.
 //!
 //! Internally synchronized (per-shard `Mutex` behind an `RwLock` map, #128); all
 //! methods take `&self`. Share it as `Arc<Relay>`.
@@ -19,22 +21,31 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
-use crate::broadcast::BroadcastDelivery;
 use crate::config::RelayCoreConfig;
 use crate::log::Log;
 use crate::shard::shard_for;
 use crate::types::{
-    AppendOutcome, CommittedOffset, DeliveryModel, Lease, LogEntry, Payload, Seq, ShardId,
+    AppendOutcome, CommittedOffset, Lease, LogEntry, Payload, Seq, ShardId, DEFAULT_PRIORITY,
 };
-use crate::workqueue::WorkQueue;
+use crate::workqueue::{LeaseOrDead, WorkQueue};
 use tokio::sync::watch;
 
 struct SubjectState {
     log: Log,
-    broadcast: BroadcastDelivery,
     workqueue: WorkQueue,
-    model: DeliveryModel,
+}
+
+/// One `(subject, shard)`'s live (un-acked) tail — the unit of the raft
+/// snapshot (#544): everything at or above the committed watermark, i.e. the
+/// backlog a replica must hold to keep serving the work-queue after a
+/// failover. Acked (deleted-on-ack) entries are deliberately excluded.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubjectLive {
+    pub subject: String,
+    pub shard: ShardId,
+    pub entries: Vec<LogEntry>,
 }
 
 #[derive(Clone)]
@@ -45,7 +56,7 @@ struct SubjectWake {
 
 /// In-process broker core. Internally synchronized; share it as `Arc<Relay>`.
 ///
-/// @spec projects/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
+/// @spec apps/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
 pub struct Relay {
     config: RelayCoreConfig,
     shards: u32,
@@ -75,7 +86,7 @@ impl Relay {
 
     /// Resolve (and lazily open) the state for `(subject, shard)`.
     ///
-    /// @spec projects/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
+    /// @spec apps/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
     fn shard_state(&self, subject: &str, shard: ShardId) -> io::Result<Arc<Mutex<SubjectState>>> {
         let key = (subject.to_string(), shard);
         if let Some(s) = self.subjects.read().expect("subjects rwlock").get(&key) {
@@ -86,21 +97,35 @@ impl Relay {
             return Ok(Arc::clone(s));
         }
         let log = Log::open(&self.config, subject, shard)?;
+        // Dead-letter subjects ({subject}{dlq_suffix}) open with max_attempts=0
+        // so a consumer draining the DLQ never re-dead-letters into {subject}.dlq.dlq.
+        let dlq_suffix = &self.config.work_queue.dlq_suffix;
+        let max_attempts = if !dlq_suffix.is_empty() && subject.ends_with(dlq_suffix.as_str()) {
+            0
+        } else {
+            self.config.work_queue.max_attempts
+        };
         let mut workqueue = WorkQueue::new(
             subject,
             shard,
             self.config.work_queue.lease_ttl_ms,
-            self.config.work_queue.max_attempts,
+            max_attempts,
+            self.config.work_queue.redeliver_backoff_ms,
         );
-        if let Some(watermark) = log.load_commit() {
-            workqueue.recover(watermark);
+        // Recover: resume from the persisted committed watermark and rebuild the
+        // ready set from the un-acked tail (backlog + delayed entries + priorities
+        // survive restarts). Only does work on recovery (a fresh log has len 0).
+        let watermark = log.load_commit();
+        if let Some(wm) = watermark {
+            workqueue.recover(wm);
         }
-        let ss = Arc::new(Mutex::new(SubjectState {
-            log,
-            broadcast: BroadcastDelivery::new(),
-            workqueue,
-            model: DeliveryModel::Broadcast,
-        }));
+        for e in log.range(watermark.unwrap_or(0))? {
+            match e.not_before {
+                Some(t) => workqueue.register_delayed(e.seq, t, e.priority),
+                None => workqueue.offer_fresh(e.seq, e.priority),
+            }
+        }
+        let ss = Arc::new(Mutex::new(SubjectState { log, workqueue }));
         map.insert(key, Arc::clone(&ss));
         Ok(ss)
     }
@@ -151,7 +176,7 @@ impl Relay {
 
     /// Publish a message; routed to `crc32(message_id) % shards`. Idempotent per id.
     ///
-    /// @spec projects/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
+    /// @spec apps/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
     pub fn publish(
         &self,
         subject: &str,
@@ -160,11 +185,49 @@ impl Relay {
         headers: BTreeMap<String, String>,
         now: DateTime<Utc>,
     ) -> io::Result<AppendOutcome> {
+        self.publish_at(
+            subject,
+            message_id,
+            payload,
+            headers,
+            None,
+            DEFAULT_PRIORITY,
+            now,
+        )
+    }
+
+    /// Publish with an optional `not_before` work-queue visibility gate (short
+    /// delayed delivery — nack-delay / retry-backoff / brief countdown). The entry
+    /// is durably appended immediately but is not leasable until `not_before`.
+    /// Idempotent per id. (Long-horizon ETA is `defer`'s job, not relay's.)
+    ///
+    /// @spec apps/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
+    pub fn publish_at(
+        &self,
+        subject: &str,
+        message_id: &str,
+        payload: Payload,
+        headers: BTreeMap<String, String>,
+        not_before: Option<DateTime<Utc>>,
+        priority: u8,
+        now: DateTime<Utc>,
+    ) -> io::Result<AppendOutcome> {
         let shard = self.route(message_id);
         let ss = self.shard_state(subject, shard)?;
         let outcome = {
             let mut g = ss.lock().expect("subject mutex");
-            g.log.append(message_id, payload, headers, now)?
+            let outcome = g
+                .log
+                .append_at(message_id, payload, headers, not_before, priority, now)?;
+            // Offer the entry into the work-queue — held in the delay index if
+            // future-dated, else immediately leasable in its priority band.
+            if !outcome.deduped {
+                match not_before {
+                    Some(t) if t > now => g.workqueue.register_delayed(outcome.seq, t, priority),
+                    _ => g.workqueue.offer_fresh(outcome.seq, priority),
+                }
+            }
+            outcome
         };
         if !outcome.deduped {
             self.wake_subscribers(subject);
@@ -175,17 +238,17 @@ impl Relay {
     /// Publish a batch (group commit); each message routes to its shard, one
     /// group-commit fsync per touched shard. Outcomes are returned in input order.
     ///
-    /// @spec projects/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
+    /// @spec apps/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
     pub fn publish_batch(
         &self,
         subject: &str,
-        messages: Vec<(String, Payload, BTreeMap<String, String>)>,
+        messages: Vec<(String, Payload, BTreeMap<String, String>, u8)>,
         now: DateTime<Utc>,
     ) -> io::Result<Vec<AppendOutcome>> {
         // Partition by shard, preserving the original index.
         let mut buckets: HashMap<
             ShardId,
-            Vec<(usize, (String, Payload, BTreeMap<String, String>))>,
+            Vec<(usize, (String, Payload, BTreeMap<String, String>, u8))>,
         > = HashMap::new();
         for (i, msg) in messages.into_iter().enumerate() {
             let shard = self.route(&msg.0);
@@ -199,7 +262,20 @@ impl Relay {
             let ss = self.shard_state(subject, shard)?;
             let outcomes = {
                 let mut g = ss.lock().expect("subject mutex");
-                g.log.append_many(msgs, now)?
+                let outcomes = g.log.append_many(msgs, now)?;
+                // Offer each new entry into the work-queue using its persisted
+                // priority. Without this the entries would never be leasable.
+                for oc in &outcomes {
+                    if !oc.deduped {
+                        let priority = g
+                            .log
+                            .entry(oc.seq)?
+                            .map(|e| e.priority)
+                            .unwrap_or(DEFAULT_PRIORITY);
+                        g.workqueue.offer_fresh(oc.seq, priority);
+                    }
+                }
+                outcomes
             };
             for (idx, oc) in idxs.into_iter().zip(outcomes) {
                 out[idx] = Some(oc);
@@ -213,22 +289,6 @@ impl Relay {
             self.wake_subscribers(subject);
         }
         Ok(out)
-    }
-
-    /// Set the descriptive delivery model for a subject (recorded on shard 0).
-    pub fn set_delivery_model(&self, subject: &str, model: DeliveryModel) -> io::Result<()> {
-        let ss = self.shard_state(subject, 0)?;
-        ss.lock().expect("subject mutex").model = model;
-        Ok(())
-    }
-
-    /// The recorded delivery model for a subject's shard 0, if it exists.
-    pub fn delivery_model(&self, subject: &str) -> Option<DeliveryModel> {
-        self.subjects
-            .read()
-            .expect("subjects rwlock")
-            .get(&(subject.to_string(), 0))
-            .map(|s| s.lock().expect("subject mutex").model)
     }
 
     /// Total entries across all of `subject`'s shards.
@@ -245,39 +305,12 @@ impl Relay {
         Ok(total)
     }
 
-    /// Register a broadcast subscriber on every shard, starting at `from_seq`.
-    ///
-    /// @spec projects/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
-    pub fn subscribe(&self, subject: &str, subscriber_id: &str, from_seq: Seq) -> io::Result<()> {
-        for shard in 0..self.shards {
-            let ss = self.shard_state(subject, shard)?;
-            ss.lock()
-                .expect("subject mutex")
-                .broadcast
-                .subscribe(subscriber_id, from_seq);
-        }
-        Ok(())
-    }
-
-    /// Deliver not-yet-delivered entries to a broadcast subscriber, merged across
-    /// shards (per-shard order preserved).
-    ///
-    /// @spec projects/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
-    pub fn poll(&self, subject: &str, subscriber_id: &str) -> io::Result<Vec<LogEntry>> {
-        let mut out = Vec::new();
-        for shard in 0..self.shards {
-            let ss = self.shard_state(subject, shard)?;
-            let mut g = ss.lock().expect("subject mutex");
-            let g = &mut *g;
-            out.extend(g.broadcast.poll(subscriber_id, &g.log)?);
-        }
-        Ok(out)
-    }
-
     /// Lease the next ready entry, scanning shards from a rotating start so the
-    /// whole subject drains across shards.
+    /// whole subject drains across shards. Entries that have exhausted
+    /// `max_attempts` are dead-lettered (durably routed to `{subject}{dlq_suffix}`)
+    /// and skipped, never re-offered.
     ///
-    /// @spec projects/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
+    /// @spec apps/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
     pub fn lease(
         &self,
         subject: &str,
@@ -287,21 +320,66 @@ impl Relay {
         let start = (self.lease_cursor.fetch_add(1, Ordering::Relaxed) % self.shards as u64) as u32;
         for off in 0..self.shards {
             let shard = (start + off) % self.shards;
-            let ss = self.shard_state(subject, shard)?;
-            let mut g = ss.lock().expect("subject mutex");
-            let len = g.log.len();
-            if let Some(l) = g.workqueue.lease(consumer_id, len, now) {
+            if let Some(l) = self.lease_one(subject, shard, consumer_id, now)? {
                 return Ok(Some(l));
             }
         }
         Ok(None)
     }
 
+    /// Lease one entry from a single shard, dead-lettering any exhausted entries
+    /// encountered first. Returns `Ok(None)` when the shard's queue is drained.
+    ///
+    /// Dead-lettering crosses subjects (publish to `{subject}{dlq_suffix}`), so it
+    /// runs WITHOUT holding the source shard lock — and the DLQ append is made
+    /// durable BEFORE the source entry is discarded (hazard H2), so a crash
+    /// mid-way at worst re-delivers (at-least-once), never loses, the task.
+    ///
+    /// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
+    fn lease_one(
+        &self,
+        subject: &str,
+        shard: ShardId,
+        consumer_id: &str,
+        now: DateTime<Utc>,
+    ) -> io::Result<Option<Lease>> {
+        loop {
+            // Phase A: under the source lock, lease or detect a dead entry and
+            // read its body (the dead seq is popped out of the pick rotation).
+            let (dead_seq, dead_entry, attempts) = {
+                let ss = self.shard_state(subject, shard)?;
+                let mut g = ss.lock().expect("subject mutex");
+                match g.workqueue.lease_or_dead(consumer_id, now) {
+                    LeaseOrDead::Leased(l) => return Ok(Some(l)),
+                    LeaseOrDead::Empty => return Ok(None),
+                    LeaseOrDead::Dead { seq, attempts } => (seq, g.log.entry(seq)?, attempts),
+                }
+            };
+            // Phase B (no source lock held): durably route to the DLQ, then
+            // discard from the source so its watermark/storage advances.
+            if let Some(entry) = dead_entry {
+                let dlq = format!("{subject}{}", self.config.work_queue.dlq_suffix);
+                let mut headers = entry.headers.clone();
+                headers.insert("x-relay-dlq-reason".to_string(), "max-attempts".to_string());
+                headers.insert("x-relay-dlq-attempts".to_string(), attempts.to_string());
+                headers.insert("x-relay-origin-subject".to_string(), subject.to_string());
+                headers.insert("x-relay-origin-seq".to_string(), entry.seq.to_string());
+                let dlq_id = format!("{}:dlq", entry.message_id);
+                self.publish(&dlq, &dlq_id, entry.payload, headers, now)?;
+            }
+            let ss = self.shard_state(subject, shard)?;
+            let mut g = ss.lock().expect("subject mutex");
+            g.workqueue.discard(dead_seq);
+            self.persist_and_truncate(&mut g)?;
+            // loop: re-pick from this shard (next entry may be ready or dead).
+        }
+    }
+
     /// Read a leased entry's stored body (`message_id` + `payload` + `headers`)
     /// by its `(subject, shard, seq)`, so a work-queue consumer knows what it
     /// leased and can fetch claim-check input / dispatch on the task (#166).
     ///
-    /// @spec projects/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
+    /// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
     pub fn entry(&self, subject: &str, shard: ShardId, seq: Seq) -> io::Result<Option<LogEntry>> {
         let ss = self.shard_state(subject, shard)?;
         let g = ss.lock().expect("subject mutex");
@@ -310,7 +388,7 @@ impl Relay {
 
     /// Lease up to `max` entries, accumulating across shards.
     ///
-    /// @spec projects/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
+    /// @spec apps/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
     pub fn lease_batch(
         &self,
         subject: &str,
@@ -325,27 +403,37 @@ impl Relay {
                 break;
             }
             let shard = (start + off) % self.shards;
-            let ss = self.shard_state(subject, shard)?;
-            let mut g = ss.lock().expect("subject mutex");
-            let len = g.log.len();
-            out.extend(
-                g.workqueue
-                    .lease_batch(consumer_id, len, max - out.len(), now),
-            );
+            // Dead-letter-aware: drain this shard one entry at a time so exhausted
+            // entries are routed to the DLQ rather than re-offered.
+            while out.len() < max {
+                match self.lease_one(subject, shard, consumer_id, now)? {
+                    Some(l) => out.push(l),
+                    None => break,
+                }
+            }
         }
         Ok(out)
     }
 
+    /// Persist the committed watermark (for recovery) then reclaim the log below
+    /// it (delete-on-ack). H1: persist-before-truncate, so a crash can never leave
+    /// the watermark stale-low with the acked segment already gone.
+    fn persist_and_truncate(&self, g: &mut SubjectState) -> io::Result<()> {
+        let wm = g.workqueue.committed_watermark();
+        g.log.persist_commit(wm)?;
+        g.log.truncate_below_acked(wm)?;
+        Ok(())
+    }
+
     /// Acknowledge a lease (epoch-fenced); routed by scanning shards for the lease_id.
     ///
-    /// @spec projects/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
+    /// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
     pub fn ack(&self, subject: &str, lease_id: &str, epoch: Option<u64>) -> io::Result<bool> {
         for shard in 0..self.shards {
             let ss = self.shard_state(subject, shard)?;
             let mut g = ss.lock().expect("subject mutex");
             if g.workqueue.ack(lease_id, epoch) {
-                let wm = g.workqueue.committed_watermark();
-                g.log.persist_commit(wm)?;
+                self.persist_and_truncate(&mut g)?;
                 return Ok(true);
             }
         }
@@ -353,10 +441,10 @@ impl Relay {
     }
 
     /// Release (Nack) a held lease for immediate redelivery; routed by scanning
-    /// shards for the `lease_id`. Wakes the subject's consumers so an idle
-    /// `/consume` stream re-leases the entry at once instead of waiting for TTL.
+    /// shards. Wakes the subject's consumers so an idle `/consume` stream re-leases
+    /// the entry at once instead of waiting for TTL.
     ///
-    /// @spec projects/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
+    /// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
     pub fn release(&self, subject: &str, lease_id: &str) -> io::Result<bool> {
         let mut released = false;
         for shard in 0..self.shards {
@@ -376,7 +464,7 @@ impl Relay {
     /// Acknowledge many leases; each shard acks the ones it owns. Returns
     /// (accepted count, committed offset of shard 0).
     ///
-    /// @spec projects/relay/tech-design/logic/work-queue-throughput-per-shard-lock-o-1-lease-cursor-batch-leas.md#logic
+    /// @spec apps/relay/tech-design/logic/work-queue-throughput-per-shard-lock-o-1-lease-cursor-batch-leas.md#logic
     pub fn ack_batch(
         &self,
         subject: &str,
@@ -388,8 +476,7 @@ impl Relay {
             let mut g = ss.lock().expect("subject mutex");
             let n = g.workqueue.ack_batch(acks);
             if n > 0 {
-                let wm = g.workqueue.committed_watermark();
-                g.log.persist_commit(wm)?;
+                self.persist_and_truncate(&mut g)?;
             }
             total += n;
         }
@@ -399,7 +486,7 @@ impl Relay {
 
     /// Extend a held lease (heartbeat); routed by scanning shards for the lease_id.
     ///
-    /// @spec projects/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
+    /// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
     pub fn heartbeat(
         &self,
         subject: &str,
@@ -419,38 +506,84 @@ impl Relay {
 
     /// Reclaim expired leases on `subject` (all shards); returns reclaimed seqs.
     ///
-    /// @spec projects/relay/tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
+    /// @spec apps/relay/tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
     pub fn reclaim_expired(&self, subject: &str, now: DateTime<Utc>) -> io::Result<Vec<Seq>> {
         let mut out = Vec::new();
         for shard in 0..self.shards {
             let ss = self.shard_state(subject, shard)?;
-            out.extend(
-                ss.lock()
-                    .expect("subject mutex")
-                    .workqueue
-                    .reclaim_expired(now),
-            );
+            let mut g = ss.lock().expect("subject mutex");
+            out.extend(g.workqueue.reclaim_expired(now));
         }
         Ok(out)
     }
 
     /// The committed work-queue offset for `subject` (shard 0; offsets are per-shard).
     ///
-    /// @spec projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
+    /// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
     pub fn committed_offset(&self, subject: &str) -> io::Result<Option<CommittedOffset>> {
         let ss = self.shard_state(subject, 0)?;
-        let c = ss
-            .lock()
-            .expect("subject mutex")
-            .workqueue
-            .committed_offset();
-        Ok(c)
+        let g = ss.lock().expect("subject mutex");
+        Ok(g.workqueue.committed_offset())
+    }
+
+    /// Dump the live (un-acked) state of every open `(subject, shard)` — the
+    /// raft snapshot body (#544): per shard, the entries at or above the
+    /// committed watermark, in seq order; fully-acked shards are omitted.
+    /// Deterministically ordered by `(subject, shard)`.
+    pub fn dump_live(&self) -> io::Result<Vec<SubjectLive>> {
+        let states: Vec<((String, ShardId), Arc<Mutex<SubjectState>>)> = {
+            self.subjects
+                .read()
+                .expect("subjects rwlock")
+                .iter()
+                .map(|(k, s)| (k.clone(), Arc::clone(s)))
+                .collect()
+        };
+        let mut out = Vec::new();
+        for ((subject, shard), s) in states {
+            let g = s.lock().expect("subject mutex");
+            let entries = g.log.range(g.workqueue.committed_watermark())?;
+            if !entries.is_empty() {
+                out.push(SubjectLive {
+                    subject,
+                    shard,
+                    entries,
+                });
+            }
+        }
+        out.sort_by(|a, b| (&a.subject, a.shard).cmp(&(&b.subject, b.shard)));
+        Ok(out)
+    }
+
+    /// Load a [`dump_live`](Relay::dump_live) capture by re-publishing every
+    /// entry through the normal engine path — idempotent per `message_id`
+    /// (dedupe merges overlap), preserving `not_before`/`priority` and the
+    /// original append timestamp. An idempotent MERGE, not a wipe: raft only
+    /// installs a snapshot on a replica whose applied publish stream is a
+    /// prefix of the leader's, so merging extends it; entries this node holds
+    /// that the leader already trimmed stay (surplus redelivery candidates —
+    /// at-least-once, same as the un-replicated lease model).
+    pub fn load_live(&self, dumps: Vec<SubjectLive>) -> io::Result<()> {
+        for d in dumps {
+            for e in d.entries {
+                self.publish_at(
+                    &d.subject,
+                    &e.message_id,
+                    e.payload,
+                    e.headers,
+                    e.not_before,
+                    e.priority,
+                    e.appended_at,
+                )?;
+            }
+        }
+        Ok(())
     }
 
     /// Sweep every `(subject, shard)`'s expired leases (frontier-only); returns
     /// the number reclaimed. Each shard is locked independently.
     ///
-    /// @spec projects/relay/tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
+    /// @spec apps/relay/tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
     pub fn reconcile(&self, now: DateTime<Utc>) -> usize {
         let states: Vec<(String, Arc<Mutex<SubjectState>>)> = {
             self.subjects
@@ -465,14 +598,12 @@ impl Relay {
         // entry is re-leased immediately (matches `release`; #465 wake-based push).
         let mut woken: HashSet<String> = HashSet::new();
         for (subject, s) in &states {
-            let n = s
-                .lock()
-                .expect("subject mutex")
-                .workqueue
-                .reclaim_expired(now)
-                .len();
-            if n > 0 {
-                total += n;
+            let mut g = s.lock().expect("subject mutex");
+            // Reclaim expired leases + promote due delays.
+            let n = g.workqueue.reclaim_expired(now).len();
+            let promoted = g.workqueue.promote_due(now);
+            total += n;
+            if n > 0 || promoted > 0 {
                 woken.insert(subject.clone());
             }
         }

@@ -22,8 +22,8 @@ e2e_tests:
     claim_id: guard-static-runtime-evidence
     contract_id: relay-guard-security-report
     category: security
-    test_path: projects/relay/tests/security_relay_security_hardening_guard_scan.rs
-    command: "cd projects/relay && ../../target/debug/vat run guard-security"
+    test_path: apps/relay/tests/security_relay_security_hardening_guard_scan.rs
+    command: "cd apps/relay && ../../target/debug/vat run guard-security"
     required_for_production: false
     assertions:
       - "guard scan over relay reports no untriaged Docker, Kubernetes, or static security findings."
@@ -40,10 +40,10 @@ tool_contracts:
     tool: guard
     manifest: guard-relay-security.toml
     category: security
-    command: "cd projects/relay && ../../target/debug/vat run guard-security"
+    command: "cd apps/relay && ../../target/debug/vat run guard-security"
     native:
       version: 1
       project: relay
       source_contract: relay-security-hardening-guard-scan
-      delegate_command: "cd projects/relay && ../../target/debug/vat run guard-security"
+      delegate_command: "cd apps/relay && ../../target/debug/vat run guard-security"
 ```

@@ -1,6 +1,6 @@
 ---
 id: relay-perf-gate
-summary: A permanent regression gate (mirrors lumen perf_gate_vs_db) — arena compare-N + ratchet across three cells (broadcast, work-queue, durable log) vs NATS / RabbitMQ / Redpanda. Primary bar = NATS. Gate = no-regression ratchet + must-beat where claimed. relay-side benches + ratchet rule are standalone; competitor adapters run in CI.
+summary: A permanent regression gate (mirrors lumen perf_gate_vs_db) — a single work-queue cell vs RabbitMQ quorum/classic queues, NATS JetStream WorkQueuePolicy, Redis Streams, and Dragonfly. Primary bar = RabbitMQ (the single-cast work-queue broker relay replaces). Redpanda/Kafka-class replay journals are tape competitors, not relay competitors. Gate = no-regression ratchet + must-beat where claimed. relay-side benches, the bench_compare harness, and the ratchet rule are standalone; arena remains the advisory ratio wrapper.
 capability_refs:
   - id: competitor-performance
     role: primary
@@ -17,7 +17,7 @@ capability_refs:
 fill_sections: [logic, config, unit-test, changes]
 ---
 
-# relay competitor perf-gate — vs NATS / RabbitMQ / Redpanda (arena, ratchet)
+# relay competitor perf-gate — vs RabbitMQ / NATS JetStream / Redis Streams (work queue ratchet)
 
 ## Logic
 <!-- type: logic lang: mermaid -->
@@ -32,10 +32,10 @@ nodes:
     label: "arena runs each cell as one workload fanned across N targets (relay + competitors)"
   cells:
     kind: process
-    label: "Cells: broadcast (vs NATS core / Redis pub-sub), work-queue (vs RabbitMQ / JetStream / Redis Streams), durable log (vs Redpanda / Kafka / Pulsar)"
+    label: "Cell: work-queue (publish -> lease/reserve/read -> ack/delete) vs RabbitMQ / JetStream / Redis Streams / Dragonfly"
   measure:
     kind: process
-    label: "Measure the metric per target (fan-out latency, lease/ack throughput, append + replay-from-seq)"
+    label: "Measure publish throughput and lease/ack throughput per target"
   ratio:
     kind: process
     label: "ratio = peer / relay; with lower-is-better latency, ratio > 1 means relay wins"
@@ -44,7 +44,7 @@ nodes:
     label: "Ratchet: is relay's ratio still >= baseline * ratchet (no regression since last run)?"
   mustbeat:
     kind: decision
-    label: "On cells where relay claims to win (primary bar = NATS): is relay actually faster?"
+    label: "On cells where relay claims to win (primary bar = RabbitMQ): is relay actually faster?"
   pass:
     kind: terminal
     label: "Gate passes; record new baselines"
@@ -62,7 +62,7 @@ edges:
   - { from: mustbeat, to: pass, label: "won where claimed" }
 ---
 flowchart TD
-    run([arena compare-N]) --> cells[3 cells x N targets]
+    run([arena compare-N]) --> cells[1 work-queue cell x N targets]
     cells --> measure[measure metric per target]
     measure --> ratio[ratio = peer / relay]
     ratio --> ratchet{>= baseline * ratchet?}
@@ -76,28 +76,24 @@ flowchart TD
 
 ```yaml
 # relay perf-gate (arena compare-N + ratchet); mirrors lumen perf_gate_vs_db.
-# The live comparison runs via arena against the spec referenced by the relay
-# project's ec.benchmark binding in .aw/config.toml. Competitor adapters run in
-# CI: NATS / RabbitMQ / Redpanda speak native (non-HTTP) protocols, so they use
-# arena's command flavor, while relay is driven over its HTTP/2 service.
+# The executable comparison is `cargo run -p relay --release --example
+# bench_compare -- --backend <target>`, with one closed-loop workload and one
+# measurement implementation. Every backend is durable-only: relay engine uses a
+# disk-backed data dir and the default fsync policy; RabbitMQ uses durable queues
+# + persistent messages + confirms; JetStream uses file storage; Redis/Dragonfly
+# must have append-only persistence enabled or the harness fails fast. arena wraps
+# those runs for normalized ratio + ratchet reporting; it is not the daily
+# production EC gate.
 
 base: relay            # ratios divide by relay
 ratchet: 0.95          # relay may not drop below 95% of its recorded baseline ratio
-primary_bar: nats      # the thing relay replaces; must-beat where claimed
+primary_bar: rabbitmq  # the thing relay replaces; must-beat where claimed
 
 cells:
-  broadcast:
-    competitors: [nats-core, redis-pubsub]
-    metric: fanout_p99_ms      # lower is better
-    must_beat: [nats-core]
   work_queue:
-    competitors: [rabbitmq-quorum, nats-jetstream, redis-streams]
-    metric: lease_ack_qps      # higher is better
-    must_beat: [nats-jetstream]
-  durable_log:
-    competitors: [redpanda, pulsar]
-    metric: append_qps         # higher is better
-    must_beat: []              # report-only vs Kafka-class for now
+    competitors: [rabbitmq-quorum, nats-jetstream, redis-streams, dragonfly-streams]
+    metrics: [publish_qps, lease_ack_qps]      # higher is better
+    must_beat: [rabbitmq-quorum]
 ```
 ## Unit Test
 <!-- type: unit-test lang: mermaid -->
@@ -130,7 +126,7 @@ nodes:
     label: "assert the gate FAILS even if the ratchet held"
   t_bench:
     kind: process
-    label: "run each benched workload (append, fan-out, lease+ack) at small scale"
+    label: "run each benched workload (publish, lease+ack) at small scale"
   a_bench:
     kind: terminal
     label: "assert each completes and the work-queue cycle is exactly-once (gate workloads are valid)"
@@ -159,27 +155,32 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: projects/relay/Cargo.toml
+  - path: apps/relay/Cargo.toml
     action: modify
     section: config
     impl_mode: hand-written
-    reason: "Add criterion dev-dependency and the relay_bench benchmark target."
-  - path: projects/relay/src/perf_gate.rs
+    reason: "Add criterion, h2c, Redis, NATS, and RabbitMQ dev dependencies plus the relay_bench and bench_compare targets."
+  - path: apps/relay/src/perf_gate.rs
     action: create
     section: logic
     impl_mode: hand-written
     reason: "The ratchet gate rule: evaluate per-cell ratios against the recorded baseline (no-regression) plus must-beat, returning a pass/fail verdict."
-  - path: projects/relay/src/lib.rs
+  - path: apps/relay/src/lib.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Declare and re-export the perf_gate module."
-  - path: projects/relay/benches/relay_bench.rs
+  - path: apps/relay/benches/relay_bench.rs
     action: create
     section: unit-test
     impl_mode: hand-written
-    reason: "criterion benchmarks for the three gate cells: append throughput, broadcast fan-out, work-queue lease+ack cycle (the relay-side measurement)."
-  - path: projects/relay/tests/perf_gate.rs
+    reason: "criterion benchmarks for the relay-side publish and work-queue lease+ack cycle."
+  - path: apps/relay/examples/bench_compare.rs
+    action: create
+    section: unit-test
+    impl_mode: hand-written
+    reason: "Closed-loop durable-only executable harness for engine, relay h2c, RabbitMQ, NATS JetStream, Redis Streams, and Dragonfly using the same publish then lease/ack workload."
+  - path: apps/relay/tests/perf_gate.rs
     action: create
     section: unit-test
     impl_mode: hand-written
@@ -192,6 +193,6 @@ changes:
 **Verdict:** approved
 
 - [logic] The gate is sound: per-cell ratio vs base, ratchet (no-regression vs recorded baseline), then must-beat on claimed cells; either failing condition fails the build. Mirrors lumen perf_gate_vs_db.
-- [config] base/ratchet/primary_bar + three cells (broadcast / work-queue / durable-log) with competitors, metric direction, and must-beat. Drives the arena compare-N spec.
+- [config] base/ratchet/primary_bar + one work-queue cell with competitors, metric direction, and must-beat, matching the single-cast work-queue broker (no broadcast or tape-style replay cell).
 - [unit-test] Pure ratchet-rule cases (hold / regress / must-beat lost) are deterministic; the workload smoke keeps the benched cells honest in CI without competitors.
-- [changes] relay-side benches + ratchet rule + tests; criterion is a dev-dependency only. Competitor adapters + the arena spec + EC binding are infra alongside, keeping the crate standalone.
+- [changes] relay-side benches + ratchet rule + tests + the bench_compare harness; external broker clients are dev-dependencies only. arena is the advisory ratio wrapper, keeping the production EC gate standalone.

@@ -32,7 +32,7 @@ nodes:
     label: "lease or ack?"
   pick:
     kind: process
-    label: "O(1) pick: pop the redeliver min-heap if non-empty (prefer redeliver), else take next_offer and increment it"
+    label: "O(bands)~O(1) pick: scan priority bands high->low; within a band prefer the redeliver min-heap (reclaimed/promoted, smallest seq) then the fresh queue (publish order). Entries are fed in explicitly via offer_fresh(seq, priority) at publish (replacing the monotonic next_offer cursor), so a higher-priority entry leases first even if published later."
   grant:
     kind: process
     label: "Grant Lease(epoch = ++attempt); for lease-batch, repeat up to `max`"
@@ -62,7 +62,7 @@ edges:
 flowchart TD
     req([lease / ack, single or batch]) --> resolve[lock only this shard]
     resolve --> which{lease or ack?}
-    which -->|lease| pick[O(1): redeliver-heap else next_offer++]
+    which -->|lease| pick[O(bands): scan bands high->low; redeliver heap else fresh queue]
     pick --> grant[grant epoch lease, up to max]
     grant --> done([return; unlock])
     which -->|ack| ack[epoch-checked delete + acked.insert]
@@ -245,6 +245,8 @@ nodes:
   a_ackbatch: { kind: terminal, label: "assert acked count + committed_seq advances; stale epoch in batch is skipped" }
   t_concurrency: { kind: process, label: "two subjects driven concurrently from many tasks" }
   a_concurrency: { kind: terminal, label: "assert each subject's messages each delivered exactly once (per-shard lock isolates subjects)" }
+  t_priority: { kind: process, label: "publish across u8 priority bands (a higher band published AFTER a lower one); max priority" }
+  a_priority: { kind: terminal, label: "assert higher band leases first, same-band order is FIFO, and u8::MAX is the top band" }
 edges:
   - { from: suite, to: t_order }
   - { from: t_order, to: a_order }
@@ -258,6 +260,8 @@ edges:
   - { from: t_ackbatch, to: a_ackbatch }
   - { from: suite, to: t_concurrency }
   - { from: t_concurrency, to: a_concurrency }
+  - { from: suite, to: t_priority }
+  - { from: t_priority, to: a_priority }
 ---
 flowchart TD
     suite([wq throughput suite]) --> t_order[lease in order]
@@ -272,47 +276,54 @@ flowchart TD
     t_ackbatch --> a_ackbatch([count+committed; stale skipped])
     suite --> t_concurrency[two subjects concurrent]
     t_concurrency --> a_concurrency([exactly-once per subject])
+    suite --> t_priority[publish across bands]
+    t_priority --> a_priority([higher band first; FIFO; u8 max])
 ```
 ## Changes
 <!-- type: changes lang: yaml -->
 
 ```yaml
 changes:
-  - path: projects/relay/src/workqueue.rs
+  - path: apps/relay/src/workqueue.rs
     action: modify
     section: logic
     impl_mode: hand-written
-    reason: "O(1) next-eligible cursor: next_offer + redeliver BinaryHeap (prefer redeliver) replacing the O(n) scan; committed watermark advanced incrementally; add lease_batch and ack_batch."
-  - path: projects/relay/src/engine.rs
+    reason: "O(1) next-eligible cursor (next_offer + redeliver BinaryHeap) replacing the O(n) scan; committed watermark advanced incrementally; add lease_batch and ack_batch. Phase 5: replace the monotonic next_offer cursor with PRIORITY_BANDS bands (each a fresh VecDeque + redeliver min-heap); pick scans bands high->low (O(bands)); offer_fresh(seq, priority) feeds entries in at publish; priority_of routes reclaim/promote/release into the right band; LogEntry/PublishRequest gain priority (recovery rebuilds bands from persisted priority)."
+  - path: apps/relay/src/engine.rs
     action: modify
     section: logic
     impl_mode: hand-written
-    reason: "Per-(subject,shard) locking: subjects behind RwLock<HashMap<String, Arc<Mutex<SubjectState>>>>; methods take &self with interior locking; add lease_batch / ack_batch; reconcile locks each shard independently."
-  - path: projects/relay/src/wire.rs
+    reason: "Per-(subject,shard) locking: subjects behind RwLock<HashMap<String, Arc<Mutex<SubjectState>>>>; methods take &self with interior locking; add lease_batch / ack_batch; reconcile locks each shard independently. Phase 5: publish/publish_batch offer_fresh each new entry into its priority band (publish_at gains a priority arg); recovery offer_fresh/register_delayed the un-acked tail with each entry's persisted priority."
+  - path: apps/relay/src/wire.rs
     action: modify
     section: schema
     impl_mode: hand-written
     reason: "LeaseBatchRequest/Response, AckOne, AckBatchRequest/Response DTOs."
-  - path: projects/relay/src/server.rs
+  - path: apps/relay/src/server.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "AppState holds Arc<Relay> (no global mutex); add POST lease-batch / ack-batch handlers (JSON + CBOR)."
-  - path: projects/relay/src/openapi.rs
+  - path: apps/relay/src/openapi.rs
     action: modify
     section: rest-api
     impl_mode: hand-written
     reason: "Add lease-batch and ack-batch paths to the served OpenAPI."
-  - path: projects/relay/src/reconciler.rs
+  - path: apps/relay/src/reconciler.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "spawn_reconciler takes Arc<Relay> (engine is now internally synchronized)."
-  - path: projects/relay/tests/work_queue_throughput.rs
+  - path: apps/relay/tests/work_queue_throughput.rs
     action: create
     section: unit-test
     impl_mode: hand-written
     reason: "Tests: O(1) cursor ordering, prefer-redeliver, committed watermark, lease-batch/ack-batch, and per-subject concurrency isolation."
+  - path: apps/relay/tests/priority.rs
+    action: create
+    section: unit-test
+    impl_mode: hand-written
+    reason: "Phase 5 tests: higher priority band leases first (even when published later), same-band FIFO, default priority is 10, batch publish preserves per-message priority, and u8::MAX is the top band."
 ```
 
 # Reviews

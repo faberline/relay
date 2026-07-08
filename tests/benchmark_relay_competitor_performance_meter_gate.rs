@@ -1,4 +1,4 @@
-// SPEC-MANAGED: projects/relay/external-contracts/competitor-performance/efficiency/perf-gate.md#relay-competitor-performance-meter-gate
+// SPEC-MANAGED: apps/relay/external-contracts/competitor-performance/efficiency/perf-gate.md#relay-competitor-performance-meter-gate
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec relay-competitor-performance-meter-gate
@@ -7,16 +7,16 @@
 // @contract relay-meter-throughput-ratchet
 // @category efficiency
 // @required_for_production true
-// @command cd projects/relay && ../../target/debug/vat run meter-perf
+// @command cd apps/relay && ../../target/debug/vat run meter-perf
 // AW-EC-END
 
 // Contract: The normalized perf-gate ratchet fails on regression and must-beat loss.
-// Contract: The small-scale append, broadcast, and work-queue lease/ack workloads complete correctly.
+// Contract: The small-scale publish and work-queue lease/ack workloads complete correctly.
 // Contract: The gate is executed by meter inside a vat workspace, not by a legacy arena-only dispatch path.
 #[test]
 #[ignore = "AW EC gate: run via `aw health --verify-ec` or `cargo test -- --ignored`"]
 fn relay_competitor_performance_meter_gate() {
-    let command = "cd projects/relay && ../../target/debug/vat run meter-perf";
+    let command = "cd apps/relay && ../../target/debug/vat run meter-perf";
     let id = "relay-competitor-performance-meter-gate";
     let mut root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     while !root.join(".aw").is_dir() {

@@ -1,4 +1,4 @@
-// SPEC-MANAGED: projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
+// SPEC-MANAGED: apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
 // HANDWRITE-BEGIN gap="missing-generator:schema:1e4054bb" tracker="pending-tracker" reason="Core data model per the Schema contract."
 //! Core data model for the relay broker.
 //!
@@ -11,6 +11,17 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+/// Default work-queue priority for producer requests that omit it.
+///
+/// Priority is an unsigned byte: `0` is lowest, `255` is highest, and higher
+/// values lease before lower values. The default is intentionally low-ish so
+/// most tasks can stay at baseline while urgent tasks have plenty of headroom.
+pub const DEFAULT_PRIORITY: u8 = 10;
+
+pub fn default_priority() -> u8 {
+    DEFAULT_PRIORITY
+}
 
 /// Opaque message body carried by the broker.
 ///
@@ -37,28 +48,9 @@ pub type Seq = u64;
 /// idempotency / dedupe key so an at-least-once retry maps to the same entry.
 pub type MessageId = String;
 
-/// How a subject's appended messages are delivered.
+/// One durable record in the ordered log; the unit of work-queue lease.
 ///
-/// `Broadcast`/`Multicast` fan out every message to every (group) subscriber,
-/// replayable from a seq. `WorkQueue` leases each message to exactly one
-/// competing consumer. `Singlecast` is the degenerate one-consumer case of
-/// `WorkQueue`. The relay core supports broadcast and work-queue delivery over
-/// the *same* log simultaneously; this enum is descriptive routing metadata.
-///
-/// @spec projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DeliveryModel {
-    Singlecast,
-    Multicast,
-    Broadcast,
-    WorkQueue,
-}
-
-/// One durable record in the ordered log; the unit of both broadcast replay
-/// and work-queue lease.
-///
-/// @spec projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
+/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LogEntry {
     /// Monotonic position within `(subject, shard)`.
@@ -73,11 +65,20 @@ pub struct LogEntry {
     pub headers: BTreeMap<String, String>,
     /// Server time the entry was durably appended.
     pub appended_at: DateTime<Utc>,
+    /// Work-queue visibility gate (delayed / ETA / countdown delivery): the entry
+    /// is durably appended immediately but is not leasable until this time.
+    /// `None` = leasable at once. Does not affect broadcast replay.
+    #[serde(default)]
+    pub not_before: Option<DateTime<Utc>>,
+    /// Work-queue priority (0 = lowest, 255 = highest; higher leases first).
+    /// Does not affect broadcast.
+    #[serde(default = "default_priority")]
+    pub priority: u8,
 }
 
 /// Result of a publish/append; idempotent on `MessageId`.
 ///
-/// @spec projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
+/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppendOutcome {
     /// Seq of the (new or pre-existing) entry.
@@ -86,28 +87,10 @@ pub struct AppendOutcome {
     pub deduped: bool,
 }
 
-/// Broadcast/fan-out read position; each subscriber advances independently and
-/// may replay from any seq.
-///
-/// `position` is the next seq this subscriber will be delivered (exclusive of
-/// what it has already received).
-///
-/// @spec projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SubscriberCursor {
-    pub subscriber_id: String,
-    pub subject: Subject,
-    pub shard: ShardId,
-    /// Seq the subscription (re)started replay from.
-    pub from_seq: Seq,
-    /// Next seq to deliver to this subscriber.
-    pub position: Seq,
-}
-
 /// Work-queue grant of one entry to exactly one consumer until it acks or the
 /// lease expires.
 ///
-/// @spec projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
+/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lease {
     /// Unique id for this grant; required to ack.
@@ -127,14 +110,14 @@ pub struct Lease {
     /// (re)lease. ack / heartbeat with a stale epoch are no-ops — this fences a
     /// worker whose lease was reclaimed after it stalled.
     ///
-    /// @spec projects/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#schema
+    /// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#schema
     pub epoch: u64,
 }
 
 /// Work-queue durable progress: every entry at or below `committed_seq` has
 /// been acked.
 ///
-/// @spec projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
+/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommittedOffset {
     pub subject: Subject,

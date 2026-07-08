@@ -1,13 +1,16 @@
-// SPEC-MANAGED: projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
+// SPEC-MANAGED: apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
 // HANDWRITE-BEGIN gap="missing-generator:logic:3e8f9afa" tracker="pending-tracker" reason="Durable ordered log substrate: append with deterministic-id dedupe, monotonic seq, RAM ring + disk segment persistence, ordered read/replay."
 //! Durable ordered log substrate for one `(subject, shard)`.
 //!
 //! Append assigns a monotonic, gap-free [`Seq`], dedupes on [`MessageId`], and
 //! persists entries as newline-delimited JSON. Storage is **segmented** (#131):
-//! the active segment rolls at `segment_bytes`, and retention prunes the oldest
-//! whole segments by `max_bytes_per_shard` / `max_age_secs`, advancing
-//! `start_seq`. RAM is bounded (#130): only the most recent `ram_ring_entries`
-//! stay resident; older (but un-pruned) entries are read back from their segment
+//! the active segment rolls at `segment_bytes`. Retention is delete-on-ack only
+//! ([`Log::truncate_below_acked`]): the engine calls it after durably
+//! persisting the work-queue committed watermark, dropping the oldest whole
+//! segments that are fully below it and advancing `start_seq`; an un-acked
+//! entry pins the head, so backlog is never dropped by wall-clock age or size.
+//! RAM is bounded (#130): only the most recent `ram_ring_entries` stay
+//! resident; older (but un-truncated) entries are read back from their segment
 //! via a per-segment byte-offset index. The dedupe map is a FIFO window.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -15,10 +18,12 @@ use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 
 use crate::config::{FsyncPolicy, RelayCoreConfig};
-use crate::types::{AppendOutcome, LogEntry, MessageId, Payload, Seq, ShardId, Subject};
+use crate::types::{
+    AppendOutcome, LogEntry, MessageId, Payload, Seq, ShardId, Subject, DEFAULT_PRIORITY,
+};
 
 /// One on-disk NDJSON segment holding seqs `[base_seq, next segment's base_seq)`.
 struct Segment {
@@ -30,7 +35,7 @@ struct Segment {
 
 /// A durable ordered log for a single `(subject, shard)`.
 ///
-/// @spec projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
+/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
 pub struct Log {
     subject: Subject,
     shard: ShardId,
@@ -51,8 +56,6 @@ pub struct Log {
     // ---- disk (None fields => RAM-only) ----
     dir: Option<PathBuf>,
     segment_bytes: u64,
-    max_bytes: u64,
-    max_age: i64,
     segments: Vec<Segment>,
     writer: Option<BufWriter<File>>,
     /// Bytes in the active (last) segment.
@@ -112,8 +115,6 @@ impl Log {
             dedupe_cap: cap_or_unbounded(config.dedupe.window_entries),
             dir: None,
             segment_bytes: config.segment_bytes.max(1),
-            max_bytes: config.retention.max_bytes_per_shard,
-            max_age: config.retention.max_age_secs as i64,
             segments: Vec::new(),
             writer: None,
             active_bytes: 0,
@@ -240,7 +241,7 @@ impl Log {
 
     /// Number of sparse index points (≈ len / INDEX_STRIDE). For tests / metrics.
     ///
-    /// @spec projects/relay/tech-design/logic/sparse-offset-index-scale-the-log-to-billions-of-entries.md#logic
+    /// @spec apps/relay/tech-design/logic/sparse-offset-index-scale-the-log-to-billions-of-entries.md#logic
     pub fn index_entries(&self) -> usize {
         self.index.len()
     }
@@ -284,7 +285,7 @@ impl Log {
     /// Read one entry by seq — RAM ring when resident, else its segment on disk;
     /// `None` if out of range or pruned.
     ///
-    /// @spec projects/relay/tech-design/logic/bounded-ram-durable-log-entry-eviction-offset-index-disk-backed.md#logic
+    /// @spec apps/relay/tech-design/logic/bounded-ram-durable-log-entry-eviction-offset-index-disk-backed.md#logic
     pub fn entry(&self, seq: Seq) -> io::Result<Option<LogEntry>> {
         if seq >= self.len || seq < self.start_seq {
             return Ok(None);
@@ -299,7 +300,7 @@ impl Log {
     /// Ordered entries from `from_seq` (clamped up to `start_seq`) onward; the
     /// cold prefix is read from disk segments in order, the hot tail from RAM.
     ///
-    /// @spec projects/relay/tech-design/logic/log-segment-rotation-retention-full-log-lifecycle.md#logic
+    /// @spec apps/relay/tech-design/logic/log-segment-rotation-retention-full-log-lifecycle.md#logic
     pub fn range(&self, from_seq: Seq) -> io::Result<Vec<LogEntry>> {
         let from = from_seq.max(self.start_seq).min(self.len);
         let ring_start = self.ring_start();
@@ -390,40 +391,68 @@ impl Log {
         Ok(())
     }
 
-    /// Prune the oldest whole segments by total bytes / age, advancing `start_seq`.
-    /// Never prunes the active (last) segment.
-    fn prune(&mut self, now: DateTime<Utc>) -> io::Result<()> {
-        loop {
-            if self.segments.len() <= 1 {
+    /// Remove the oldest whole segment, advancing `start_seq` and dropping the
+    /// sparse index below the new start. Caller guarantees `segments.len() > 1`
+    /// (the active/last segment is never removed).
+    fn drop_oldest_segment(&mut self) {
+        let removed = self.segments.remove(0);
+        let _ = std::fs::remove_file(&removed.path);
+        let new_start = self.segments[0].base_seq;
+        // Drop sparse index points below the new start.
+        let drop_n = self.index.partition_point(|&(s, _)| s < new_start);
+        self.index.drain(0..drop_n);
+        self.start_seq = new_start;
+    }
+
+    /// Delete-on-ack head truncation: drop every oldest whole segment whose
+    /// entries are all `< watermark` (i.e. fully acked), advancing `start_seq`.
+    /// Never drops the active (last) segment. A still-leased / un-acked hole at
+    /// seq `h` pins `watermark = h`, so the segment containing `h` and every
+    /// later segment survive.
+    ///
+    /// `watermark` is the work-queue committed watermark (count of contiguous
+    /// acked entries from 0, so seqs `[0, watermark)` are acked). The caller MUST
+    /// have durably persisted `watermark` (via [`Log::persist_commit`]) *before*
+    /// calling this, so a crash can never leave the watermark stale-low while the
+    /// acked segment is already gone.
+    ///
+    /// @spec apps/relay/tech-design/logic/log-segment-rotation-retention-full-log-lifecycle.md#logic
+    pub fn truncate_below_acked(&mut self, watermark: Seq) -> io::Result<()> {
+        while self.segments.len() > 1 {
+            // segment_end(0) is the exclusive end of the oldest segment; when it
+            // is <= watermark every seq it holds is < watermark (fully acked).
+            if self.segment_end(0) > watermark {
                 break;
             }
-            let total: u64 = self.segments.iter().map(|s| s.bytes).sum();
-            let oldest = &self.segments[0];
-            let over_bytes = self.max_bytes > 0 && total > self.max_bytes;
-            let too_old =
-                self.max_age > 0 && oldest.last_ts < now - Duration::seconds(self.max_age);
-            if !over_bytes && !too_old {
-                break;
-            }
-            let removed = self.segments.remove(0);
-            let _ = std::fs::remove_file(&removed.path);
-            let new_start = self.segments[0].base_seq;
-            // Drop sparse index points below the new start.
-            let drop_n = self.index.partition_point(|&(s, _)| s < new_start);
-            self.index.drain(0..drop_n);
-            self.start_seq = new_start;
+            self.drop_oldest_segment();
         }
         Ok(())
     }
 
     /// Append `payload` under `message_id`. Idempotent on `message_id`.
     ///
-    /// @spec projects/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
+    /// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
     pub fn append(
         &mut self,
         message_id: &str,
         payload: Payload,
         headers: BTreeMap<String, String>,
+        now: DateTime<Utc>,
+    ) -> io::Result<AppendOutcome> {
+        self.append_at(message_id, payload, headers, None, DEFAULT_PRIORITY, now)
+    }
+
+    /// Append with an optional `not_before` work-queue visibility gate (delayed /
+    /// ETA delivery) and a priority. Idempotent on `message_id`.
+    ///
+    /// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
+    pub fn append_at(
+        &mut self,
+        message_id: &str,
+        payload: Payload,
+        headers: BTreeMap<String, String>,
+        not_before: Option<DateTime<Utc>>,
+        priority: u8,
         now: DateTime<Utc>,
     ) -> io::Result<AppendOutcome> {
         if let Some(&seq) = self.dedupe.get(message_id) {
@@ -439,6 +468,8 @@ impl Log {
             payload,
             headers,
             appended_at: now,
+            not_before,
+            priority,
         };
         self.write_line(&entry)?;
         match self.fsync {
@@ -454,7 +485,6 @@ impl Log {
         self.dedupe_insert(message_id.to_string(), seq);
         self.ring_push(entry, disk);
         self.len += 1;
-        self.prune(now)?;
         Ok(AppendOutcome {
             seq,
             deduped: false,
@@ -464,15 +494,15 @@ impl Log {
     /// Append a batch with ONE fsync (group commit). Idempotent per `message_id`
     /// (against existing entries and within the batch).
     ///
-    /// @spec projects/relay/tech-design/logic/default-durable-engine-throughput-group-commit-fsync-publish-bat.md#logic
+    /// @spec apps/relay/tech-design/logic/default-durable-engine-throughput-group-commit-fsync-publish-bat.md#logic
     pub fn append_many(
         &mut self,
-        items: Vec<(String, Payload, BTreeMap<String, String>)>,
+        items: Vec<(String, Payload, BTreeMap<String, String>, u8)>,
         now: DateTime<Utc>,
     ) -> io::Result<Vec<AppendOutcome>> {
         let mut outcomes = Vec::with_capacity(items.len());
         let disk = self.writer.is_some();
-        for (message_id, payload, headers) in items {
+        for (message_id, payload, headers, priority) in items {
             if let Some(&seq) = self.dedupe.get(&message_id) {
                 outcomes.push(AppendOutcome { seq, deduped: true });
                 continue;
@@ -487,6 +517,8 @@ impl Log {
                 payload,
                 headers,
                 appended_at: now,
+                not_before: None,
+                priority,
             };
             self.write_line(&entry)?;
             self.dedupe_insert(message_id, seq);
@@ -501,13 +533,12 @@ impl Log {
         if self.fsync != FsyncPolicy::Os {
             self.fsync_active()?;
         }
-        self.prune(now)?;
         Ok(outcomes)
     }
 
     /// Durably record the committed watermark (one write + fsync). No-op when RAM-only.
     ///
-    /// @spec projects/relay/tech-design/logic/default-durable-engine-throughput-group-commit-fsync-publish-bat.md#logic
+    /// @spec apps/relay/tech-design/logic/default-durable-engine-throughput-group-commit-fsync-publish-bat.md#logic
     pub fn persist_commit(&self, watermark: Seq) -> io::Result<()> {
         if let Some(path) = &self.commit_path {
             let mut f = File::create(path)?;
@@ -519,7 +550,7 @@ impl Log {
 
     /// Load the durable committed watermark recorded by a previous run, if any.
     ///
-    /// @spec projects/relay/tech-design/logic/default-durable-engine-throughput-group-commit-fsync-publish-bat.md#logic
+    /// @spec apps/relay/tech-design/logic/default-durable-engine-throughput-group-commit-fsync-publish-bat.md#logic
     pub fn load_commit(&self) -> Option<Seq> {
         let path = self.commit_path.as_ref()?;
         std::fs::read_to_string(path).ok()?.trim().parse().ok()
