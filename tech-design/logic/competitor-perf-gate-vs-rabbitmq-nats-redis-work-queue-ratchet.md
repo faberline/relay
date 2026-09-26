@@ -155,32 +155,32 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/relay/Cargo.toml
+  - path: Cargo.toml
     action: modify
     section: config
     impl_mode: hand-written
     reason: "Add criterion, h2c, Redis, NATS, and RabbitMQ dev dependencies plus the relay_bench and bench_compare targets."
-  - path: apps/relay/src/perf_gate.rs
+  - path: src/perf_gate.rs
     action: create
     section: logic
     impl_mode: hand-written
     reason: "The ratchet gate rule: evaluate per-cell ratios against the recorded baseline (no-regression) plus must-beat, returning a pass/fail verdict."
-  - path: apps/relay/src/lib.rs
+  - path: src/lib.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Declare and re-export the perf_gate module."
-  - path: apps/relay/benches/relay_bench.rs
+  - path: benches/relay_bench.rs
     action: create
     section: unit-test
     impl_mode: hand-written
     reason: "criterion benchmarks for the relay-side publish and work-queue lease+ack cycle."
-  - path: apps/relay/examples/bench_compare.rs
+  - path: examples/bench_compare.rs
     action: create
     section: unit-test
     impl_mode: hand-written
     reason: "Closed-loop durable-only executable harness for engine, relay h2c, RabbitMQ, NATS JetStream, Redis Streams, and Dragonfly using the same publish then lease/ack workload."
-  - path: apps/relay/tests/perf_gate.rs
+  - path: tests/perf_gate.rs
     action: create
     section: unit-test
     impl_mode: hand-written

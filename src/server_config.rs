@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/interfaces/rest/http-2-openapi-transport-client-side-sharding-work-queue-consume.md#config
+// SPEC-MANAGED: tech-design/interfaces/rest/http-2-openapi-transport-client-side-sharding-work-queue-consume.md#config
 // HANDWRITE-BEGIN gap="missing-generator:config:04be064e" tracker="pending-tracker" reason="RelayServerConfig per the Config contract."
 //! HTTP/2 transport configuration, embedding the relay core config.
 
@@ -8,7 +8,7 @@ use crate::config::RelayCoreConfig;
 
 /// Settings for the HTTP/2 (h2c) transport in front of the relay core.
 ///
-/// @spec apps/relay/tech-design/interfaces/rest/http-2-openapi-transport-client-side-sharding-work-queue-consume.md#config
+/// @spec tech-design/interfaces/rest/http-2-openapi-transport-client-side-sharding-work-queue-consume.md#config
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RelayServerConfig {
@@ -22,7 +22,7 @@ pub struct RelayServerConfig {
     pub shard_index: u32,
     /// How often the background reconciler reclaims expired leases per shard.
     ///
-    /// @spec apps/relay/tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#config
+    /// @spec tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#config
     pub reconcile_interval_ms: u64,
     /// Embedded relay core engine settings.
     pub core: RelayCoreConfig,

@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
+// SPEC-MANAGED: tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
 // HANDWRITE-BEGIN gap="missing-generator:schema:1e4054bb" tracker="pending-tracker" reason="Core data model per the Schema contract."
 //! Core data model for the relay broker.
 //!
@@ -50,7 +50,7 @@ pub type MessageId = String;
 
 /// One durable record in the ordered log; the unit of work-queue lease.
 ///
-/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
+/// @spec tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LogEntry {
     /// Monotonic position within `(subject, shard)`.
@@ -78,7 +78,7 @@ pub struct LogEntry {
 
 /// Result of a publish/append; idempotent on `MessageId`.
 ///
-/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
+/// @spec tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppendOutcome {
     /// Seq of the (new or pre-existing) entry.
@@ -90,7 +90,7 @@ pub struct AppendOutcome {
 /// Work-queue grant of one entry to exactly one consumer until it acks or the
 /// lease expires.
 ///
-/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
+/// @spec tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lease {
     /// Unique id for this grant; required to ack.
@@ -114,14 +114,14 @@ pub struct Lease {
     /// (re)lease. ack / heartbeat with a stale epoch are no-ops — this fences a
     /// worker whose lease was reclaimed after it stalled.
     ///
-    /// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#schema
+    /// @spec tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#schema
     pub epoch: u64,
 }
 
 /// Work-queue durable progress: every entry at or below `committed_seq` has
 /// been acked.
 ///
-/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
+/// @spec tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#schema
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommittedOffset {
     pub subject: Subject,

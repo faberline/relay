@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
+// SPEC-MANAGED: tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
 // HANDWRITE-BEGIN gap="missing-generator:logic:464901bc" tracker="pending-tracker" reason="Relay core engine tying publish -> classify -> broadcast / work-queue delivery over one durable log."
 //! The in-process relay core: a durable ordered log per `(subject, shard)` with
 //! single-cast work-queue (competing-consumer) delivery over it. A message is
@@ -68,7 +68,7 @@ type IndexedPublishItem = (usize, PublishItem);
 
 /// In-process broker core. Internally synchronized; share it as `Arc<Relay>`.
 ///
-/// @spec apps/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
+/// @spec tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
 pub struct Relay {
     config: RelayCoreConfig,
     shards: u32,
@@ -98,7 +98,7 @@ impl Relay {
 
     /// Resolve (and lazily open) the state for `(subject, shard)`.
     ///
-    /// @spec apps/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
+    /// @spec tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
     fn shard_state(&self, subject: &str, shard: ShardId) -> io::Result<Arc<Mutex<SubjectState>>> {
         let key = (subject.to_string(), shard);
         if let Some(s) = self.subjects.read().expect("subjects rwlock").get(&key) {
@@ -188,7 +188,7 @@ impl Relay {
 
     /// Publish a message; routed to `crc32(message_id) % shards`. Idempotent per id.
     ///
-    /// @spec apps/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
+    /// @spec tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
     pub fn publish(
         &self,
         subject: &str,
@@ -213,7 +213,7 @@ impl Relay {
     /// is durably appended immediately but is not leasable until `not_before`.
     /// Idempotent per id. (Long-horizon ETA is `defer`'s job, not relay's.)
     ///
-    /// @spec apps/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
+    /// @spec tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
     pub fn publish_at(
         &self,
         subject: &str,
@@ -250,7 +250,7 @@ impl Relay {
     /// Publish a batch (group commit); each message routes to its shard, one
     /// group-commit fsync per touched shard. Outcomes are returned in input order.
     ///
-    /// @spec apps/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
+    /// @spec tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
     pub fn publish_batch(
         &self,
         subject: &str,
@@ -319,7 +319,7 @@ impl Relay {
     /// `max_attempts` are dead-lettered (durably routed to `{subject}{dlq_suffix}`)
     /// and skipped, never re-offered.
     ///
-    /// @spec apps/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
+    /// @spec tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
     pub fn lease(
         &self,
         subject: &str,
@@ -357,7 +357,7 @@ impl Relay {
     /// durable BEFORE the source entry is discarded (hazard H2), so a crash
     /// mid-way at worst re-delivers (at-least-once), never loses, the task.
     ///
-    /// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
+    /// @spec tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
     fn lease_one_on_node(
         &self,
         subject: &str,
@@ -405,7 +405,7 @@ impl Relay {
     /// by its `(subject, shard, seq)`, so a work-queue consumer knows what it
     /// leased and can fetch claim-check input / dispatch on the task (#166).
     ///
-    /// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
+    /// @spec tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
     pub fn entry(&self, subject: &str, shard: ShardId, seq: Seq) -> io::Result<Option<LogEntry>> {
         let ss = self.shard_state(subject, shard)?;
         let g = ss.lock().expect("subject mutex");
@@ -414,7 +414,7 @@ impl Relay {
 
     /// Lease up to `max` entries, accumulating across shards.
     ///
-    /// @spec apps/relay/tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
+    /// @spec tech-design/logic/multi-shard-per-subject-server-side-sharding-horizontal-scale.md#logic
     pub fn lease_batch(
         &self,
         subject: &str,
@@ -464,7 +464,7 @@ impl Relay {
 
     /// Acknowledge a lease (epoch-fenced); routed by scanning shards for the lease_id.
     ///
-    /// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
+    /// @spec tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
     pub fn ack(&self, subject: &str, lease_id: &str, epoch: Option<u64>) -> io::Result<bool> {
         for shard in 0..self.shards {
             let ss = self.shard_state(subject, shard)?;
@@ -501,7 +501,7 @@ impl Relay {
     /// shards. Wakes the subject's consumers so an idle `/consume` stream re-leases
     /// the entry at once instead of waiting for TTL.
     ///
-    /// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
+    /// @spec tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
     pub fn release(&self, subject: &str, lease_id: &str) -> io::Result<bool> {
         let mut released = false;
         for shard in 0..self.shards {
@@ -547,7 +547,7 @@ impl Relay {
     /// Acknowledge many leases; each shard acks the ones it owns. Returns
     /// (accepted count, committed offset of shard 0).
     ///
-    /// @spec apps/relay/tech-design/logic/work-queue-throughput-per-shard-lock-o-1-lease-cursor-batch-leas.md#logic
+    /// @spec tech-design/logic/work-queue-throughput-per-shard-lock-o-1-lease-cursor-batch-leas.md#logic
     pub fn ack_batch(
         &self,
         subject: &str,
@@ -569,7 +569,7 @@ impl Relay {
 
     /// Extend a held lease (heartbeat); routed by scanning shards for the lease_id.
     ///
-    /// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
+    /// @spec tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
     pub fn heartbeat(
         &self,
         subject: &str,
@@ -611,7 +611,7 @@ impl Relay {
 
     /// Reclaim expired leases on `subject` (all shards); returns reclaimed seqs.
     ///
-    /// @spec apps/relay/tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
+    /// @spec tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
     pub fn reclaim_expired(&self, subject: &str, now: DateTime<Utc>) -> io::Result<Vec<Seq>> {
         let mut out = Vec::new();
         for shard in 0..self.shards {
@@ -624,7 +624,7 @@ impl Relay {
 
     /// The committed work-queue offset for `subject` (shard 0; offsets are per-shard).
     ///
-    /// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
+    /// @spec tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
     pub fn committed_offset(&self, subject: &str) -> io::Result<Option<CommittedOffset>> {
         let ss = self.shard_state(subject, 0)?;
         let g = ss.lock().expect("subject mutex");
@@ -734,7 +734,7 @@ impl Relay {
     /// Sweep every `(subject, shard)`'s expired leases (frontier-only); returns
     /// the number reclaimed. Each shard is locked independently.
     ///
-    /// @spec apps/relay/tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
+    /// @spec tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
     pub fn reconcile(&self, now: DateTime<Utc>) -> usize {
         let states: Vec<(String, Arc<Mutex<SubjectState>>)> = {
             self.subjects

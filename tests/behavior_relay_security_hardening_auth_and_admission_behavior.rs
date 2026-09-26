@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/external-contracts/security-hardening/security/security-evidence.md#relay-security-hardening-auth-and-admission-behavior
+// SPEC-MANAGED: external-contracts/security-hardening/security/security-evidence.md#relay-security-hardening-auth-and-admission-behavior
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec relay-security-hardening-auth-and-admission-behavior
@@ -7,7 +7,7 @@
 // @contract relay-auth-rbac-and-admission-behavior
 // @category behavior
 // @required_for_production true
-// @command bash apps/relay/scripts/ec-evidence.sh security-behavior
+// @command bash scripts/ec-evidence.sh security-behavior
 // AW-EC-END
 
 // Contract: Required auth returns 401 for missing or unknown bearer tokens and 403 when a reader attempts publish or a subject-scoped reader crosses its grant; the streaming consume route enforces the same boundary.
@@ -17,7 +17,7 @@
 #[test]
 #[ignore = "AW EC gate: run via `aw health --verify-ec` or `cargo test -- --ignored`"]
 fn relay_security_hardening_auth_and_admission_behavior() {
-    let command = "bash apps/relay/scripts/ec-evidence.sh security-behavior";
+    let command = "bash scripts/ec-evidence.sh security-behavior";
     let id = "relay-security-hardening-auth-and-admission-behavior";
     let mut root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     while !root.join(".aw").is_dir() {

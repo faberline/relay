@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#unit-test
+// SPEC-MANAGED: tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:8b15e52b" tracker="pending-tracker" reason="Tests for prefer-redeliver lease pick, epoch-fenced + idempotent ack, and heartbeat extend / fence."
 //! Work-queue API semantics (#113): prefer-redeliver lease pick, epoch-fenced
 //! and idempotent ack, and heartbeat extend / fence — exercised through the

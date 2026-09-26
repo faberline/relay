@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/bounded-ram-durable-log-entry-eviction-offset-index-disk-backed.md#unit-test
+// SPEC-MANAGED: tech-design/logic/bounded-ram-durable-log-entry-eviction-offset-index-disk-backed.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:d73d9a0d" tracker="pending-tracker" reason="Tests: disk-backed entry() for evicted seqs, ranged read across the evict boundary, bounded dedupe window, and no-eviction parity."
 //! Bounded-RAM durable log (#130): entries evicted past `ram_ring_entries` are
 //! read back from disk via the offset index; a ranged read spans the evict

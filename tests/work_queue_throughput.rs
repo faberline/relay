@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/work-queue-throughput-per-shard-lock-o-1-lease-cursor-batch-leas.md#unit-test
+// SPEC-MANAGED: tech-design/logic/work-queue-throughput-per-shard-lock-o-1-lease-cursor-batch-leas.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:b4ef76e5" tracker="pending-tracker" reason="Tests: O(1) cursor ordering, prefer-redeliver, committed watermark, lease-batch/ack-batch, and per-subject concurrency isolation."
 //! Work-queue throughput rework (#128): O(1) cursor ordering, prefer-redeliver,
 //! committed watermark, batch lease/ack, and per-subject concurrency isolation.

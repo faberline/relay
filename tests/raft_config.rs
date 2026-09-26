@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/adopt-raft-host-relaystatemachine-auto-mode-ha-drop-hand-rolled.md#unit-test
+// SPEC-MANAGED: tech-design/logic/adopt-raft-host-relaystatemachine-auto-mode-ha-drop-hand-rolled.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:d0cba133" tracker="pending-tracker" reason="Topology smoke (#544): relay derives node id / membership / peer URLs from the standard downward-API quartet via raft_runtime::cluster (the hand-derived local ordinal math is deleted); replica_mode is off without cluster env; RELAY_PEERS overrides peer DNS for a local multi-node group."
 //! Topology smoke (#544): relay's cluster shape comes from
 //! `raft_runtime::cluster` and the STANDARD downward-API env — the hand-derived

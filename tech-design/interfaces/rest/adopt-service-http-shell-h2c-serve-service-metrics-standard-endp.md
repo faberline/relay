@@ -139,42 +139,42 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/relay/Cargo.toml
+  - path: Cargo.toml
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Add service-http + metrics-prometheus path deps and tracing + tracing-subscriber (env-filter) for the shared shell and serve-path tracing init."
-  - path: apps/relay/src/metrics.rs
+  - path: src/metrics.rs
     action: create
     section: logic
     impl_mode: hand-written
     description: "RelayMetrics on libs/metrics-prometheus primitives (Latency = count + sum, render): publish / publish-batch / lease / ack / consume / other request counts + latency ms, plus the track route_layer middleware that maps the matched route pattern to its op family (mirrors keep's http/metrics.rs track)."
-  - path: apps/relay/src/lib.rs
+  - path: src/lib.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Register pub mod metrics in the crate root module wiring."
-  - path: apps/relay/src/server.rs
+  - path: src/server.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "AppState gains Arc<RelayMetrics> + draining AtomicBool with start_drain(); implements service_http::ReadinessHook and MetricsProvider; router() merges service_http::standard_probe_routes(state, Some(metrics), crate::openapi::openapi) with the /v1 data plane (route_layer metrics::track) under an outer service_http::trace_layer(); hand-rolled healthz + openapi_json handlers/routes deleted; bare (StatusCode, String) error returns become service_http::ApiErr (400 bad_request decode, 500 internal engine/encode); the /v1 prefix and CBOR success fast path are untouched."
-  - path: apps/relay/src/consume.rs
+  - path: src/consume.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Read the first up-frame before returning the response head: a non-Subscribe (or undecodable) first frame returns ApiErr 400 bad_request in the shared envelope instead of a silent empty 200 stream; drive() takes the primed prefetch/decoder."
-  - path: apps/relay/src/openapi.rs
+  - path: src/openapi.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Add pub fn openapi() -> utoipa::openapi::OpenApi (the document accessor standard_probe_routes wants); api_doc_json() reuses it."
-  - path: apps/relay/src/bin/relay.rs
+  - path: src/bin/relay.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "serve_main serves via service_http::serve(listener, app, shutdown_with_drain(|| state.start_drain(), grace)) — h2c + HTTP/1.1 on one port; ServeArgs gains --grace-secs (env RELAY_GRACE_SECS, default 10); tracing init via EnvFilter (RUST_LOG wins, else info — keep's pattern)."
-  - path: apps/relay/tests/http2_transport.rs
+  - path: tests/http2_transport.rs
     action: modify
     section: unit-test
     impl_mode: hand-written

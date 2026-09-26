@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/sparse-offset-index-scale-the-log-to-billions-of-entries.md#unit-test
+// SPEC-MANAGED: tech-design/logic/sparse-offset-index-scale-the-log-to-billions-of-entries.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:f6800828" tracker="pending-tracker" reason="Tests: correct reads at/before/after stride boundaries, sparse index size ~ N/stride, cross-segment cold range, and correct reads after prune + reopen."
 //! Sparse offset index (#134): reads seek the nearest indexed point and scan
 //! forward, so they stay correct around stride boundaries, across segments, and

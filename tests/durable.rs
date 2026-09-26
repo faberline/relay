@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/default-durable-engine-throughput-group-commit-fsync-publish-bat.md#unit-test
+// SPEC-MANAGED: tech-design/logic/default-durable-engine-throughput-group-commit-fsync-publish-bat.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:7e699a0c" tracker="pending-tracker" reason="Tests: default config is durable, publish_batch group commit + dedupe, log recovery on reopen, and committed-offset crash recovery."
 //! Default-durable throughput (#129): durable-by-default config, group-commit
 //! publish_batch with in-batch dedupe, durable-log recovery on reopen, and

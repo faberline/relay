@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/interfaces/rest/relay-keep-worker-facing-openapi-contract-polyglot-worker-integr.md#unit-test
+// SPEC-MANAGED: tech-design/interfaces/rest/relay-keep-worker-facing-openapi-contract-polyglot-worker-integr.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:db6bcdf6" tracker="pending-tracker" reason="Throwaway reference worker (test-only): drives the lease / heartbeat / ack loop over h2c against an in-process relay, validating the worker-facing contract and the served OpenAPI."
 //! Reference worker (test-only, #108): a polyglot worker integrates purely over
 //! relay's HTTP/2 + OpenAPI contract. This drives the lease -> run -> heartbeat

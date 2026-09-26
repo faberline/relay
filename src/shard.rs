@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/interfaces/rest/http-2-openapi-transport-client-side-sharding-work-queue-consume.md#logic
+// SPEC-MANAGED: tech-design/interfaces/rest/http-2-openapi-transport-client-side-sharding-work-queue-consume.md#logic
 // HANDWRITE-BEGIN gap="missing-generator:logic:c75293ac" tracker="pending-tracker" reason="Client-side sharding helper."
 //! Client-side sharding: pick a shard for a routing key with no L4 load
 //! balancer. The client computes `crc32(key) % shards` and resolves the
@@ -8,7 +8,7 @@
 ///
 /// Stable for a given (key, shards) pair. `shards` of 0 is treated as 1.
 ///
-/// @spec apps/relay/tech-design/interfaces/rest/http-2-openapi-transport-client-side-sharding-work-queue-consume.md#logic
+/// @spec tech-design/interfaces/rest/http-2-openapi-transport-client-side-sharding-work-queue-consume.md#logic
 pub fn shard_for(key: &str, shards: u32) -> u32 {
     let shards = shards.max(1);
     crc32fast::hash(key.as_bytes()) % shards

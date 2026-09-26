@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
+// SPEC-MANAGED: tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
 // HANDWRITE-BEGIN gap="missing-generator:logic:baf16980" tracker="pending-tracker" reason="Work-queue competing-consumer delivery: lease / ack / redeliver and committed offset (standard at-least-once lease / retry semantics)."
 //! Work-queue / competing-consumer delivery over a single log.
 //!
@@ -39,7 +39,7 @@ fn band_idx(priority: u8) -> usize {
 
 /// Per-`(subject, shard)` competing-consumer delivery state.
 ///
-/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
+/// @spec tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkQueue {
     subject: String,
@@ -88,7 +88,7 @@ enum Pick {
 /// dead-letter subject (a cross-subject op the engine owns) and then `discard`
 /// it from this queue.
 ///
-/// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
+/// @spec tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
 pub enum LeaseOrDead {
     Leased(Lease),
     Dead { seq: Seq, attempts: u32 },
@@ -150,7 +150,7 @@ impl WorkQueue {
     /// reclaimed/promoted (redeliver, smallest seq) over fresh (publish order).
     /// O(bands) ≈ O(1). Skips seqs that were meanwhile acked, leased, or deferred.
     ///
-    /// @spec apps/relay/tech-design/logic/work-queue-throughput-per-shard-lock-o-1-lease-cursor-batch-leas.md#logic
+    /// @spec tech-design/logic/work-queue-throughput-per-shard-lock-o-1-lease-cursor-batch-leas.md#logic
     fn pick(&mut self) -> Option<Seq> {
         for b in (0..PRIORITY_BANDS).rev() {
             while let Some(&Reverse(seq)) = self.bands[b].redeliver.peek() {
@@ -177,7 +177,7 @@ impl WorkQueue {
     /// Hold `seq` back until `visible_at` (delayed / ETA / countdown / backoff).
     /// `pick` skips it until [`WorkQueue::promote_due`] releases it.
     ///
-    /// @spec apps/relay/tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
+    /// @spec tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
     pub fn register_delayed(&mut self, seq: Seq, visible_at: DateTime<Utc>, priority: u8) {
         if self.acked.contains(&seq) {
             return;
@@ -193,7 +193,7 @@ impl WorkQueue {
     /// redeliver heap (prefer-redeliver). Returns how many were promoted, so the
     /// caller can wake idle consumers.
     ///
-    /// @spec apps/relay/tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
+    /// @spec tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
     pub fn promote_due(&mut self, now: DateTime<Utc>) -> usize {
         let cutoff = now.timestamp_millis();
         let mut promoted = 0;
@@ -270,7 +270,7 @@ impl WorkQueue {
     /// Prefer [`WorkQueue::lease_or_dead`] on the engine path so exhausted entries
     /// are dead-lettered rather than re-offered forever.
     ///
-    /// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
+    /// @spec tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
     pub fn lease(&mut self, consumer_id: &str, now: DateTime<Utc>) -> Option<Lease> {
         self.lease_on_node(consumer_id, 0, now)
     }
@@ -293,7 +293,7 @@ impl WorkQueue {
     /// engine durably routes it to the dead-letter subject and then calls
     /// [`WorkQueue::discard`].
     ///
-    /// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
+    /// @spec tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
     pub fn lease_or_dead(&mut self, consumer_id: &str, now: DateTime<Utc>) -> LeaseOrDead {
         self.lease_or_dead_on_node(consumer_id, 0, now)
     }
@@ -323,7 +323,7 @@ impl WorkQueue {
     /// Called by the engine AFTER the entry is durably on the dead-letter
     /// subject (hazard H2: DLQ-before-discard).
     ///
-    /// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
+    /// @spec tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
     pub fn discard(&mut self, seq: Seq) {
         if let Some(lease) = self.leases.remove(&seq) {
             if let Some(assignment) = self.assignments.get_mut(&seq) {
@@ -347,7 +347,7 @@ impl WorkQueue {
 
     /// Lease up to `max` entries in one call (amortizes a worker's round-trips).
     ///
-    /// @spec apps/relay/tech-design/logic/work-queue-throughput-per-shard-lock-o-1-lease-cursor-batch-leas.md#logic
+    /// @spec tech-design/logic/work-queue-throughput-per-shard-lock-o-1-lease-cursor-batch-leas.md#logic
     pub fn lease_batch(
         &mut self,
         consumer_id: &str,
@@ -383,7 +383,7 @@ impl WorkQueue {
     /// given, when it does not match the live lease. Passing `None` for `epoch`
     /// falls back to lease_id-only fencing.
     ///
-    /// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
+    /// @spec tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
     pub fn ack(&mut self, lease_id: &str, epoch: Option<u64>) -> bool {
         let Some(lease) = self.lease_for_id(lease_id) else {
             return false;
@@ -434,7 +434,7 @@ impl WorkQueue {
     /// Idempotent: returns `false` when `lease_id` is unknown. Unlike `ack` this
     /// does NOT commit the entry; the attempt count is preserved for retry caps.
     ///
-    /// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
+    /// @spec tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
     pub fn release(&mut self, lease_id: &str) -> bool {
         let Some(lease) = self.lease_for_id(lease_id) else {
             return false;
@@ -477,7 +477,7 @@ impl WorkQueue {
 
     /// Acknowledge many leases in one call; returns how many were accepted.
     ///
-    /// @spec apps/relay/tech-design/logic/work-queue-throughput-per-shard-lock-o-1-lease-cursor-batch-leas.md#logic
+    /// @spec tech-design/logic/work-queue-throughput-per-shard-lock-o-1-lease-cursor-batch-leas.md#logic
     pub fn ack_batch(&mut self, acks: &[(String, Option<u64>)]) -> usize {
         let mut n = 0;
         for (lease_id, epoch) in acks {
@@ -491,7 +491,7 @@ impl WorkQueue {
     /// Extend a held lease if `lease_id` is known and `epoch` matches the live
     /// lease; returns the new expiry, or `None` when fenced / unknown.
     ///
-    /// @spec apps/relay/tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
+    /// @spec tech-design/interfaces/rest/work-queue-api-lease-ack-heartbeat.md#logic
     pub fn heartbeat(
         &mut self,
         lease_id: &str,
@@ -537,7 +537,7 @@ impl WorkQueue {
     /// seqs onto the redeliver heap so the next lease re-offers them first.
     /// Returns the reclaimed seqs in order.
     ///
-    /// @spec apps/relay/tech-design/logic/work-queue-throughput-per-shard-lock-o-1-lease-cursor-batch-leas.md#logic
+    /// @spec tech-design/logic/work-queue-throughput-per-shard-lock-o-1-lease-cursor-batch-leas.md#logic
     pub fn reclaim_expired(&mut self, now: DateTime<Utc>) -> Vec<Seq> {
         let mut expired: Vec<Seq> = self
             .leases
@@ -577,7 +577,7 @@ impl WorkQueue {
     /// `redeliver_backoff_ms * 2^(attempt-1)`, with the exponent capped to avoid
     /// overflow. Explicit Nack (`release`) is unaffected — it re-offers at once.
     ///
-    /// @spec apps/relay/tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
+    /// @spec tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
     fn backoff_for(&self, attempt: u32) -> Duration {
         let shift = attempt.saturating_sub(1).min(16);
         let ms = self.redeliver_backoff_ms.saturating_mul(1u64 << shift);
@@ -587,7 +587,7 @@ impl WorkQueue {
     /// Highest seq such that every entry `0..=committed_seq` has been acked, or
     /// `None` when entry `0` has not been acked yet.
     ///
-    /// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
+    /// @spec tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#logic
     pub fn committed_offset(&self) -> Option<CommittedOffset> {
         if self.committed == 0 {
             None
@@ -603,7 +603,7 @@ impl WorkQueue {
     /// The committed watermark: the count of contiguous acked entries from 0
     /// (so `committed_seq = watermark - 1`). Persisted for crash recovery.
     ///
-    /// @spec apps/relay/tech-design/logic/default-durable-engine-throughput-group-commit-fsync-publish-bat.md#logic
+    /// @spec tech-design/logic/default-durable-engine-throughput-group-commit-fsync-publish-bat.md#logic
     pub fn committed_watermark(&self) -> Seq {
         self.committed
     }
@@ -612,7 +612,7 @@ impl WorkQueue {
     /// treated as committed and are never re-offered; uncommitted entries
     /// redeliver (at-least-once).
     ///
-    /// @spec apps/relay/tech-design/logic/default-durable-engine-throughput-group-commit-fsync-publish-bat.md#logic
+    /// @spec tech-design/logic/default-durable-engine-throughput-group-commit-fsync-publish-bat.md#logic
     pub fn recover(&mut self, watermark: Seq) {
         self.committed = watermark;
     }

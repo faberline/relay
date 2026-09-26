@@ -98,12 +98,12 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/relay/src/log.rs
+  - path: src/log.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Bound RAM: keep a VecDeque ring of the most recent ram_ring_entries plus a dense Vec<u64> byte-offset index; append records the offset and evicts the oldest ring entry; entry/range read evicted seqs from disk via the offset index (sequential read for the cold prefix of a range). Bound dedupe to window_entries with FIFO eviction. Replay on open rebuilds offsets + ring(last cap) + dedupe(window) + len + write_pos."
-  - path: apps/relay/tests/bounded_log.rs
+  - path: tests/bounded_log.rs
     action: create
     section: unit-test
     impl_mode: hand-written

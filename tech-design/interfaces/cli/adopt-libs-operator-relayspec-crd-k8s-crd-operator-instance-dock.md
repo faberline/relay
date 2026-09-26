@@ -59,7 +59,7 @@ nodes:
     label: "k8s instance render --profile dev|staging|prod|template [--name] [--namespace] [--image] [--out]: string-templated kind: Relay CR YAML (offline, no kube types). dev = 1 replica, 1Gi, debug, relay:latest; staging = prod-shaped single node, 20Gi, relay:<version>; prod = replicasPerShard 3, voterCount 3, 100Gi, imagePullPolicy Always, auth required + tokensSecret relay-token-registry; template = REPLACE_ME skeleton. HA peer DNS assumes the CR is named relay (serve passes prefix 'relay' to ClusterTopology::from_env)"
   dock:
     kind: process
-    label: "dockerfile render --variant source|release [--version] [--out]: source = the committed apps/relay/Dockerfile byte-for-byte (include_str + ownership-marker strip, a no-op today); release = the new committed Dockerfile.release (fetch + sha256-verify a published relay@<version> tarball into distroless) with the ARG/tag lines substituted from --version (normalize `0.4.3` -> `relay@0.4.3`). The checked-in files are the fixtures; the CLI is the source of truth (keep #777)"
+    label: "dockerfile render --variant source|release [--version] [--out]: source = the committed Dockerfile byte-for-byte (include_str + ownership-marker strip, a no-op today); release = the new committed Dockerfile.release (fetch + sha256-verify a published relay@<version> tarball into distroless) with the ARG/tag lines substituted from --version (normalize `0.4.3` -> `relay@0.4.3`). The checked-in files are the fixtures; the CLI is the source of truth (keep #777)"
   crdspec:
     kind: process
     label: "src/operator/crd.rs (feature-gated): RelaySpec derives kube::CustomResource — group relay.dev, v1alpha1, kind Relay, namespaced, status RelayStatus. #[serde(flatten)] cluster: service_k8s::ClusterSpec (image/imagePullPolicy/shardCount/replicasPerShard/voterCount/resources — shardCount defaults 1 and render PINS it to 1: relay is a single raft group) + relay knobs: storage (default 10Gi), storageClass, graceSecs (default 10, tracks terminationGracePeriodSeconds), logLevel (RUST_LOG), auth ('off'|'required' as a flat string — no divergent-variant enums in the CRD, keep #776 trap), tokensSecret (Secret name)"
@@ -145,7 +145,7 @@ requirements:
     verify: tests/operator.rs::crd_flattens_cluster_spec
   dockerfile_fixture_equality:
     id: R4
-    text: "`relay dockerfile render --variant source` reproduces the committed apps/relay/Dockerfile byte-for-byte and `--variant release` reproduces the committed apps/relay/Dockerfile.release; an explicit `--version 9.9.9` substitutes the relay@9.9.9 ARG and the relay:9.9.9 image tag (the checked-in files are fixtures of the render — keep #777 pattern)."
+    text: "`relay dockerfile render --variant source` reproduces the committed Dockerfile byte-for-byte and `--variant release` reproduces the committed Dockerfile.release; an explicit `--version 9.9.9` substitutes the relay@9.9.9 ARG and the relay:9.9.9 image tag (the checked-in files are fixtures of the render — keep #777 pattern)."
     kind: functional
     risk: medium
     verify: tests/deploy_cli.rs::dockerfile_render_reproduces_committed_fixtures
@@ -210,97 +210,97 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/relay/Cargo.toml
+  - path: Cargo.toml
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Add the operator feature mirroring keep's: [dep:kube, dep:k8s-openapi, dep:schemars, dep:service-k8s, dep:serde_yaml, rustls-provider] with optional deps kube 0.98 (runtime/derive/client), k8s-openapi 0.24 (v1_32), schemars 0.8, operator (path ../../libs/service-k8s), serde_yaml (workspace) — versions matching keep/lumen so the lockfile stays single-versioned; a private rustls-provider feature (dep:rustls 0.23) also enabled by self-update and issue; serde_yaml added to dev-dependencies for the render round-trip tests."
-  - path: apps/relay/src/operator/mod.rs
+  - path: src/operator/mod.rs
     action: create
     section: logic
     impl_mode: hand-written
     description: "Feature-gated operator module root: crd/render/reconcile submodules, re-exports (Relay, RelaySpec, RelayStatus, run), crd_yaml() = serde_json(Relay::crd()) -> normalize_kubernetes_schema_formats (recursively rewrite format: uint32/uint64 to plain integer + minimum: 0 — Kubernetes structural-schema rules) -> serde_yaml string (keep's pattern)."
-  - path: apps/relay/src/operator/crd.rs
+  - path: src/operator/crd.rs
     action: create
     section: logic
     impl_mode: hand-written
     description: "RelaySpec CustomResource (group relay.dev, v1alpha1, kind Relay, plural relays, namespaced, status RelayStatus, printcolumns Phase/Ready/Age): #[serde(flatten)] cluster: service_k8s::ClusterSpec (shardCount defaults 1; relay is a single raft group — render pins it) + storage (default 10Gi), storageClass, graceSecs (default 10), logLevel (Option, RUST_LOG), auth (flat string off|required — no divergent-variant enums in the CRD), tokensSecret (Option<String> Secret name); RelayStatus { phase, observedGeneration, readyReplicas, desiredReplicas, message }."
-  - path: apps/relay/src/operator/render.rs
+  - path: src/operator/render.rs
     action: create
     section: logic
     impl_mode: hand-written
     description: "Pure render (no I/O), everything via the shared service_k8s::render toolkit: RenderCtx (app relay, manager relay-operator, owner_ref from CR uid) -> ServiceAccount, StatefulSet via sharded_statefulset (command [relay], port http 7000, shard_count pinned 1, headless_env_key RELAY_PEER_SERVICE = {name}-headless, /data PVC with storage/storageClass, extra_env RELAY_BIND 0.0.0.0:7000 + RELAY_DATA_DIR /data + RELAY_GRACE_SECS + optional RUST_LOG + opt-in RELAY_AUTH/RELAY_TOKEN_REGISTRY_FILE with the token-registry Secret volume mounted read-only at /var/run/secrets/relay — lumen's pattern, off unless auth: required AND tokensSecret), then harden(): RollingUpdate + revisionHistoryLimit 5 + prometheus annotations + nonroot 65532 pod/container security contexts + readOnlyRootFilesystem + writable /tmp + terminationGracePeriodSeconds = graceSecs + readiness /readyz + liveness/startup /healthz probes; headless + client Services on 7000; PDB maxUnavailable 1."
-  - path: apps/relay/src/operator/reconcile.rs
+  - path: src/operator/reconcile.rs
     action: create
     section: logic
     impl_mode: hand-written
     description: "impl ManagedService for Relay: MANAGER relay-operator (SSA field manager + leader-election Lease name); render() -> render::render; readiness_targets = [StatefulSet {name}]; status_patch = Pending|Reconciling|Ready from readyReplicas vs desiredReplicas (= replicasPerShard, shard pinned 1) + observedGeneration + message; pub async fn run() = service_k8s::run::<Relay>()."
-  - path: apps/relay/src/tls.rs
+  - path: src/tls.rs
     action: create
     section: logic
     impl_mode: hand-written
     description: "install_default_crypto_provider(): behind the private rustls-provider feature install the aws-lc-rs rustls default provider once (std::sync::Once, ignore a pre-installed provider); a no-op otherwise. Called at the very top of main before clap parsing (keep's pattern — kube, raft-runtime peer transport and the online CLI ops all link rustls)."
-  - path: apps/relay/src/lib.rs
+  - path: src/lib.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Wire the new modules in the existing HANDWRITE region: pub mod tls; #[cfg(feature = \"operator\")] pub mod operator;."
-  - path: apps/relay/src/bin/relay.rs
+  - path: src/bin/relay.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Add Command::K8s + Command::Dockerfile arms (keep's shapes): k8s crd render [--out], k8s operator render [--namespace relay-system] [--out], k8s operator run (feature-gated; bail with rebuild hint otherwise), k8s instance render --profile dev|staging|prod|template [--name] [--namespace] [--image] [--out] (string-templated Relay CR YAML), dockerfile render --variant source|release [--version] [--out] (include_str fixtures, marker strip, relay@version substitution); write_or_print --out handling (directory receives the default filename); call relay::tls::install_default_crypto_provider() first in main; extend the cli_parse_surface test with the new verbs."
-  - path: apps/relay/src/llm.rs
+  - path: src/llm.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Operations topic gains the deploy-verbs paragraph: relay k8s crd|operator|instance render + relay k8s operator run (--features operator; the CR path owns production HA topology) + relay dockerfile render --variant source|release; k8s/ base = single-node direct install for kind/smoke."
-  - path: apps/relay/Dockerfile.release
+  - path: Dockerfile.release
     action: create
     section: logic
     impl_mode: hand-written
     description: "Release-image fixture (keep #777 pattern): stage 1 debian:bookworm-slim fetches + sha256-verifies the published relay@<version> linux tarball for TARGETARCH; stage 2 distroless/cc-debian12:nonroot carries only the binary; EXPOSE 7000; ENTRYPOINT /usr/local/bin/relay. Byte-for-byte reproducible by `relay dockerfile render --variant release`."
-  - path: apps/relay/k8s/operator/crd.yaml
+  - path: k8s/operator/crd.yaml
     action: create
     section: logic
     impl_mode: hand-written
     description: "The generated Relay CustomResourceDefinition fixture (output of `relay k8s crd render` from the operator build, structural-schema normalized) — backs the offline crd render path in the default (kube-free) build via include_str."
-  - path: apps/relay/k8s/operator/rbac.yaml
+  - path: k8s/operator/rbac.yaml
     action: create
     section: logic
     impl_mode: hand-written
     description: "Operator control-plane RBAC fixture: Namespace relay-system, ServiceAccount relay-operator, ClusterRole (relay.dev relays/status/finalizers; apps statefulsets; core services/serviceaccounts; policy poddisruptionbudgets; coordination.k8s.io leases), ClusterRoleBinding — namespace-substituted by `relay k8s operator render --namespace`."
-  - path: apps/relay/k8s/operator/deployment.yaml
+  - path: k8s/operator/deployment.yaml
     action: create
     section: logic
     impl_mode: hand-written
     description: "Operator Deployment fixture: runs `relay k8s operator run` from the relay image (built with --features operator), POD_NAME/POD_NAMESPACE downward env for the leader-election Lease, nonroot + readOnlyRootFilesystem hardening; replicas 1 (scale to 2+ safely — the Lease elects one active reconciler)."
-  - path: apps/relay/k8s/statefulset.yaml
+  - path: k8s/statefulset.yaml
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Base collapses to a SMALL single-node direct install for kind/smoke (dogfood rule): replicas 1, NO raft env (no REPLICAS_PER_SHARD/VOTER_COUNT — replica_mode() stays false), RELAY_BIND 0.0.0.0:7000, RELAY_DATA_DIR /data, 1Gi PVC, /readyz + /healthz probes on 7000, nonroot hardening. The hand-maintained 3-replica raft topology is dropped — that shape now comes from `relay k8s instance render --profile prod` through the operator."
-  - path: apps/relay/k8s/service.yaml
+  - path: k8s/service.yaml
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Headless Service relay-headless (StatefulSet serviceName / peer DNS) + ClusterIP client Service relay, both on port 7000 targeting the http container port."
-  - path: apps/relay/k8s/pdb.yaml
+  - path: k8s/pdb.yaml
     action: delete
     section: logic
     impl_mode: hand-written
     description: "A PodDisruptionBudget over a 1-replica base is noise; quorum PDBs for HA topologies come from the operator render (maxUnavailable 1)."
-  - path: apps/relay/scripts/kind-failover-smoke.sh
+  - path: scripts/kind-failover-smoke.sh
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Rewritten against the single `relay` auto-mode image: build the linux relay bin in a cached cargo container, thin relay:dev runtime image, kind create + load, apply inline heredoc manifests (headless + client Service, 3-replica StatefulSet with POD_NAME fieldRef / SHARD_COUNT 1 / REPLICAS_PER_SHARD 3 / VOTER_COUNT 3 / RELAY_PEER_SERVICE, PDB maxUnavailable 1) on port 7000, then the existing failover proof (leader elect, publish, kill leader, re-elect, no committed loss) via /raftz + /v1/events/publish. Zero relay-raft references."
-  - path: apps/relay/tests/deploy_cli.rs
+  - path: tests/deploy_cli.rs
     action: create
     section: unit-test
     impl_mode: hand-written
     description: "Offline deploy-CLI tests driving the COMPILED relay binary in the default build: every k8s/dockerfile render verb succeeds and round-trips serde_yaml; dockerfile source/release outputs equal the committed fixtures (+ --version substitution); the CRD render is structural-schema safe (no uint32/uint64, minimum floor, kind Relay); operator run without the feature exits nonzero with the rebuild hint; the smoke script has no relay-raft refs and its heredoc manifests parse and carry the auto-mode env; the llm operations topic names the deploy verbs."
-  - path: apps/relay/tests/operator.rs
+  - path: tests/operator.rs
     action: create
     section: unit-test
     impl_mode: hand-written

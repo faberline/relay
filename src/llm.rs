@@ -8,7 +8,7 @@
 /// (`upgrade` / `issue`), per the CONTRIBUTING.md CLI convention.
 pub const TOOL: cli_std::ToolInfo = cli_std::ToolInfo {
     project: "relay",
-    repo: "chrischeng-c4/axiom",
+    repo: "faberline/relay",
     target: env!("RELAY_TARGET"),
     version: env!("CARGO_PKG_VERSION"),
     git_sha: env!("RELAY_GIT_SHA"),

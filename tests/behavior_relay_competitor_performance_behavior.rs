@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/external-contracts/competitor-performance/efficiency/perf-gate.md#relay-competitor-performance-behavior
+// SPEC-MANAGED: external-contracts/competitor-performance/efficiency/perf-gate.md#relay-competitor-performance-behavior
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec relay-competitor-performance-behavior
@@ -7,7 +7,7 @@
 // @contract relay-work-queue-performance-workload-behavior
 // @category behavior
 // @required_for_production true
-// @command bash apps/relay/scripts/ec-evidence.sh performance-behavior
+// @command bash scripts/ec-evidence.sh performance-behavior
 // AW-EC-END
 
 // Contract: The publish, ordered lease, batch acknowledgement, committed-watermark, redelivery, and per-subject isolation workloads complete with every message acknowledged exactly once.
@@ -16,7 +16,7 @@
 #[test]
 #[ignore = "AW EC gate: run via `aw health --verify-ec` or `cargo test -- --ignored`"]
 fn relay_competitor_performance_behavior() {
-    let command = "bash apps/relay/scripts/ec-evidence.sh performance-behavior";
+    let command = "bash scripts/ec-evidence.sh performance-behavior";
     let id = "relay-competitor-performance-behavior";
     let mut root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     while !root.join(".aw").is_dir() {

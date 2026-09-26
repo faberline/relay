@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#unit-test
+// SPEC-MANAGED: tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:delayed-eta" tracker="pending-tracker" reason="Tests: delayed/ETA delivery — a future-dated entry is not leasable until due, an immediate sibling is leasable at once, reconcile promotes a due entry, and the delay survives a restart."
 //! Delayed / ETA / countdown delivery (Phase 3): a future-dated entry is durably
 //! appended but withheld from the work queue until its `not_before`; `promote_due`

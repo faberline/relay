@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/interfaces/rest/http-2-openapi-transport-client-side-sharding-work-queue-consume.md#schema
+// SPEC-MANAGED: tech-design/interfaces/rest/http-2-openapi-transport-client-side-sharding-work-queue-consume.md#schema
 // HANDWRITE-BEGIN gap="missing-generator:schema:a9efe379" tracker="pending-tracker" reason="Transport DTOs and length-prefixed CBOR framing."
 //! HTTP/2 transport wire types and framing.
 //!

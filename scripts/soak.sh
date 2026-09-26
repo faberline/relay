@@ -11,9 +11,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RELAY_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-REPO_ROOT="$(cd "$RELAY_DIR/../.." && pwd)"
-source "$REPO_ROOT/libs/service-observability/scripts/soak-metrics.sh"
-
+REPO_ROOT="$(cd "$RELAY_DIR" && pwd)"
+# service-observability comes from faberline/core: use the checkout cargo resolved.
+SERVICE_OBSERVABILITY_DIR="$(cd "$REPO_ROOT" && cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "service-observability") | .manifest_path' | xargs dirname)"
+source "$SERVICE_OBSERVABILITY_DIR/scripts/soak-metrics.sh"
 DURATION_SECS="${RELAY_SOAK_DURATION_SECS:-60}"
 UPSTREAM="${RELAY_UPSTREAM:-127.0.0.1:7000}"
 RSS_GROWTH_PCT="${RELAY_SOAK_RSS_GROWTH_PCT:-10}"

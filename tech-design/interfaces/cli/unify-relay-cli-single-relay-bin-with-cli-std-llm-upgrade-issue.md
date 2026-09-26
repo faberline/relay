@@ -61,61 +61,61 @@ requirements:
     text: "RELAY_GIT_SHA, RELAY_BUILT_AT, and RELAY_TARGET are emitted by libs/build-stamp and populate the cli-std ToolInfo used by llm/upgrade/issue."
     kind: functional
     risk: low
-    verify: toolinfo_is_stamped test in apps/relay/src/bin/relay.rs
+    verify: toolinfo_is_stamped test in src/bin/relay.rs
   cli_parses_convention_verbs:
     id: R1
     text: "The relay CLI parses llm, upgrade, and issue search/view/create with their convention flags, and bare relay (no subcommand) parses as serve."
     kind: functional
     risk: medium
-    verify: cli_parse_surface tests in apps/relay/src/bin/relay.rs
+    verify: cli_parse_surface tests in src/bin/relay.rs
   serve_replaces_relay_server:
     id: R2
     text: "Bare relay serves exactly what relay-server served (RELAY_BIND/RELAY_DATA_DIR honored); the relay-server binary is removed from the crate."
     kind: regression
     risk: medium
-    verify: apps/relay/tests/http2_transport.rs against the relay serve router
+    verify: tests/http2_transport.rs against the relay serve router
 ---
 flowchart TD
-    r1[R1 cli parses convention verbs] --> cli_parse_surface_tests_in_projects_relay_src_bin_relay_rs[cli_parse_surface tests in apps/relay/src/bin/relay.rs]
-    r2[R2 serve replaces relay server] --> projects_relay_tests_http2_transport_rs_against_the_relay_serve_router[apps/relay/tests/http2_transport.rs against the relay serve router]
-    r3[R3 build stamp feeds toolinfo] --> toolinfo_is_stamped_test_in_projects_relay_src_bin_relay_rs[toolinfo_is_stamped test in apps/relay/src/bin/relay.rs]
+    r1[R1 cli parses convention verbs] --> cli_parse_surface_tests_in_projects_relay_src_bin_relay_rs[cli_parse_surface tests in src/bin/relay.rs]
+    r2[R2 serve replaces relay server] --> projects_relay_tests_http2_transport_rs_against_the_relay_serve_router[tests/http2_transport.rs against the relay serve router]
+    r3[R3 build stamp feeds toolinfo] --> toolinfo_is_stamped_test_in_projects_relay_src_bin_relay_rs[toolinfo_is_stamped test in src/bin/relay.rs]
 ```
 ## Changes
 <!-- type: changes lang: yaml -->
 
 ```yaml
 changes:
-  - path: apps/relay/Cargo.toml
+  - path: Cargo.toml
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Replace [[bin]] relay-server with [[bin]] relay (src/bin/relay.rs); add clap + cli-std (default-features = false) deps and the build-stamp build-dependency; add self-update/issue features mapping to cli-std/online (keep's feature layout, with the report-issue alias omitted)."
-  - path: apps/relay/src/bin/relay.rs
+  - path: src/bin/relay.rs
     action: create
     section: logic
     impl_mode: hand-written
     description: "Single relay CLI bin (clap): bare relay (no subcommand) runs the h2c server with ServeArgs flags falling back to RELAY_BIND/RELAY_DATA_DIR env (the relay_server.rs behavior verbatim); Command::Llm/Upgrade/Issue dispatch to cli_std::{llm,upgrade,issue} with relay's ToolInfo; mirrors projects/keep/src/bin/keep.rs."
-  - path: apps/relay/src/bin/relay_server.rs
+  - path: src/bin/relay_server.rs
     action: delete
     section: logic
     impl_mode: hand-written
     description: "Removed: bare relay serve replaces the relay-server entrypoint."
-  - path: apps/relay/build.rs
+  - path: build.rs
     action: create
     section: logic
     impl_mode: hand-written
     description: "Delegate to build_stamp::stamp(\"RELAY\") so RELAY_GIT_SHA/RELAY_BUILT_AT/RELAY_TARGET feed ToolInfo — no hand-rolled git/timestamp logic."
-  - path: apps/relay/src/llm.rs
+  - path: src/llm.rs
     action: create
     section: logic
     impl_mode: hand-written
     description: "relay's cli_std::llm::Topic list (outline, http-api, operations) + the stamped ToolInfo constructor shared by llm/upgrade/issue."
-  - path: apps/relay/Dockerfile
+  - path: Dockerfile
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Build/copy the relay bin instead of relay-server (relay-raft line untouched)."
-  - path: apps/relay/src/bin/relay.rs
+  - path: src/bin/relay.rs
     action: modify
     section: unit-test
     impl_mode: hand-written

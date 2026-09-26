@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/adopt-raft-host-relaystatemachine-auto-mode-ha-drop-hand-rolled.md#logic
+// SPEC-MANAGED: tech-design/logic/adopt-raft-host-relaystatemachine-auto-mode-ha-drop-hand-rolled.md#logic
 // HANDWRITE-BEGIN gap="missing-generator:logic:786bf09f" tracker="pending-tracker" reason="raft-runtime adoption surface (#544): PubCommand (the replicated multi-subject publish), RelayStateMachine (apply = idempotent engine publish + OutcomeWindow + fsynced applied-index marker; snapshot/restore = live-state dump/load), and RelayRaft (single-group RaftHost wrapper: store on {data_dir}/raft, router passthrough, propose-publish with outcome claim)."
 //! raft-runtime-backed consensus for relay (#544).
 //!

@@ -8,13 +8,13 @@ traits = ["service", "long_running", "cli_facing", "competitive_replacement", "n
 
 [ec.efficiency]
 tool = "meter"
-meter = "apps/relay"
-command = "cd apps/relay && ../../target/debug/vat run meter-perf"
+meter = "."
+command = "vat run meter-perf"
 
 [ec.security]
 tool = "guard"
-dir = "apps/relay"
-command = "cd apps/relay && ../../target/debug/vat run guard-security"
+dir = "."
+command = "vat run guard-security"
 
 [[workspaces]]
 name = "relay"
@@ -35,9 +35,9 @@ capability_id = "competitor-performance"
 claim_id = "normalized-win-ratchet-decision-model"
 contract_id = "relay-work-queue-performance-workload-behavior"
 category = "behavior"
-td_ref = "apps/relay/external-contracts/competitor-performance/efficiency/perf-gate.md#relay-competitor-performance-behavior"
-test_path = "apps/relay/tests/behavior_relay_competitor_performance_behavior.rs"
-command = "bash apps/relay/scripts/ec-evidence.sh performance-behavior"
+td_ref = "external-contracts/competitor-performance/efficiency/perf-gate.md#relay-competitor-performance-behavior"
+test_path = "tests/behavior_relay_competitor_performance_behavior.rs"
+command = "bash scripts/ec-evidence.sh performance-behavior"
 required_for_production = true
 assertions = [
     "The publish, ordered lease, batch acknowledgement, committed-watermark, redelivery, and per-subject isolation workloads complete with every message acknowledged exactly once.",
@@ -51,9 +51,9 @@ capability_id = "competitor-performance"
 claim_id = "normalized-win-ratchet-decision-model"
 contract_id = "relay-performance-workload-stability"
 category = "stability"
-td_ref = "apps/relay/external-contracts/competitor-performance/efficiency/perf-gate.md#relay-competitor-performance-bounded-soak"
-test_path = "apps/relay/tests/stability_relay_competitor_performance_bounded_soak.rs"
-command = "RELAY_SOAK_AUTOSTART=1 bash apps/relay/scripts/soak.sh"
+td_ref = "external-contracts/competitor-performance/efficiency/perf-gate.md#relay-competitor-performance-bounded-soak"
+test_path = "tests/stability_relay_competitor_performance_bounded_soak.rs"
+command = "RELAY_SOAK_AUTOSTART=1 bash scripts/soak.sh"
 required_for_production = true
 assertions = [
     "The bounded fixed-state publish, lease, heartbeat, and inspect workload completes for 60 seconds with a non-zero operation count and zero HTTP or lifecycle errors.",
@@ -66,9 +66,9 @@ capability_id = "competitor-performance"
 claim_id = "normalized-win-ratchet-decision-model"
 contract_id = "relay-measured-durable-lifecycle-envelope"
 category = "efficiency"
-td_ref = "apps/relay/external-contracts/competitor-performance/efficiency/perf-gate.md#relay-competitor-performance-measured-durable-lifecycle"
-test_path = "apps/relay/tests/efficiency_relay_competitor_performance_measured_durable_lifecycle.rs"
-command = "bash apps/relay/scripts/ec-evidence.sh performance-efficiency"
+td_ref = "external-contracts/competitor-performance/efficiency/perf-gate.md#relay-competitor-performance-measured-durable-lifecycle"
+test_path = "tests/efficiency_relay_competitor_performance_measured_durable_lifecycle.rs"
+command = "bash scripts/ec-evidence.sh performance-efficiency"
 required_for_production = true
 assertions = [
     "A report-only child process uses temporary disk storage with FsyncPolicy::Always to publish and then lease/ack exactly 2,000 128-byte payloads in 100-message batches.",
@@ -84,9 +84,9 @@ capability_id = "security-hardening"
 claim_id = "request-limit-and-malformed-frame-negative-tests"
 contract_id = "relay-auth-rbac-and-admission-behavior"
 category = "behavior"
-td_ref = "apps/relay/external-contracts/security-hardening/security/security-evidence.md#relay-security-hardening-auth-and-admission-behavior"
-test_path = "apps/relay/tests/behavior_relay_security_hardening_auth_and_admission_behavior.rs"
-command = "bash apps/relay/scripts/ec-evidence.sh security-behavior"
+td_ref = "external-contracts/security-hardening/security/security-evidence.md#relay-security-hardening-auth-and-admission-behavior"
+test_path = "tests/behavior_relay_security_hardening_auth_and_admission_behavior.rs"
+command = "bash scripts/ec-evidence.sh security-behavior"
 required_for_production = true
 assertions = [
     "Required auth returns 401 for missing or unknown bearer tokens and 403 when a reader attempts publish or a subject-scoped reader crosses its grant; the streaming consume route enforces the same boundary.",
@@ -101,9 +101,9 @@ capability_id = "security-hardening"
 claim_id = "guard-static-runtime-evidence"
 contract_id = "relay-guard-security-report"
 category = "security"
-td_ref = "apps/relay/external-contracts/security-hardening/security/security-evidence.md#relay-security-hardening-guard-scan"
-test_path = "apps/relay/tests/security_relay_security_hardening_guard_scan.rs"
-command = "cd apps/relay && ../../target/debug/vat run guard-security"
+td_ref = "external-contracts/security-hardening/security/security-evidence.md#relay-security-hardening-guard-scan"
+test_path = "tests/security_relay_security_hardening_guard_scan.rs"
+command = "vat run guard-security"
 required_for_production = true
 assertions = [
     "guard scan over apps/relay reports no untriaged Docker, Kubernetes, or static security findings.",
@@ -117,9 +117,9 @@ capability_id = "security-hardening"
 claim_id = "network-policy-and-peer-mtls-termination"
 contract_id = "relay-untrusted-peer-and-restricted-workload-security"
 category = "security"
-td_ref = "apps/relay/external-contracts/security-hardening/security/security-evidence.md#relay-security-hardening-negative-peer-and-kubernetes-boundaries"
-test_path = "apps/relay/tests/security_relay_security_hardening_negative_peer_and_kubernetes_boundaries.rs"
-command = "bash apps/relay/scripts/ec-evidence.sh security-boundaries"
+td_ref = "external-contracts/security-hardening/security/security-evidence.md#relay-security-hardening-negative-peer-and-kubernetes-boundaries"
+test_path = "tests/security_relay_security_hardening_negative_peer_and_kubernetes_boundaries.rs"
+command = "bash scripts/ec-evidence.sh security-boundaries"
 required_for_production = true
 assertions = [
     "A client that trusts Relay's legitimate server CA but presents an identity signed by an attacker CA is rejected by the required-mTLS server handshake before HTTP or Raft routing.",
@@ -134,9 +134,9 @@ capability_id = "security-hardening"
 claim_id = "bearer-auth-token-registry"
 contract_id = "relay-security-last-known-good-stability"
 category = "stability"
-td_ref = "apps/relay/external-contracts/security-hardening/security/security-evidence.md#relay-security-hardening-rotation-and-peer-stability"
-test_path = "apps/relay/tests/stability_relay_security_hardening_rotation_and_peer_stability.rs"
-command = "bash apps/relay/scripts/ec-evidence.sh security-stability"
+td_ref = "external-contracts/security-hardening/security/security-evidence.md#relay-security-hardening-rotation-and-peer-stability"
+test_path = "tests/stability_relay_security_hardening_rotation_and_peer_stability.rs"
+command = "bash scripts/ec-evidence.sh security-stability"
 required_for_production = true
 assertions = [
     "A valid registry rotation becomes visible without restarting Relay, invalid JSON/empty/read-failed rotations retain the last-known-good registry, and failure audit classes remain credential-free.",
@@ -147,18 +147,18 @@ assertions = [
 [[aw.ec.generated.tool_manifests]]
 id = "relay-guard-security"
 tool = "guard"
-path = "apps/relay/guard-relay-security.toml"
-td_ref = "apps/relay/external-contracts/security-hardening/security/security-evidence.md#relay-guard-security"
+path = "guard-relay-security.toml"
+td_ref = "external-contracts/security-hardening/security/security-evidence.md#relay-guard-security"
 content_digest = "sha256:5509ae8a1a6fa3408c9b083bca2a183d9a5e44c0049400eb79c05acbe03aac7d"
-command = "cd apps/relay && ../../target/debug/vat run guard-security"
+command = "vat run guard-security"
 category = "security"
 
 [[aw.ec.generated.tool_manifests]]
 id = "relay-meter-performance"
 tool = "meter"
-path = "apps/relay/meter-relay-performance.toml"
-td_ref = "apps/relay/external-contracts/competitor-performance/efficiency/perf-gate.md#relay-meter-performance"
+path = "meter-relay-performance.toml"
+td_ref = "external-contracts/competitor-performance/efficiency/perf-gate.md#relay-meter-performance"
 content_digest = "sha256:30ccedbe3f8baaf10e8f8d3b016f2624c931c7537887cef2a448738baca7d9da"
-command = "cd apps/relay && ../../target/debug/vat run meter-perf"
+command = "vat run meter-perf"
 category = "efficiency"
 # AW-EC-END

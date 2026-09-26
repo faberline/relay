@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # HANDWRITE-BEGIN gap="missing-generator:e2e-test:relay-fail-closed-ec-oracle" tracker="#2175" reason="Relay's EC gates need a test-owned outer oracle because Cargo and meter both exit successfully when an exact filter executes zero tests."
-# @spec apps/relay/tech-design/logic/replace-static-only-security-ec-with-negative-evidence.md#unit-test
+# @spec tech-design/logic/replace-static-only-security-ec-with-negative-evidence.md#unit-test
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/relay-ec-evidence.XXXXXX")"
 
 cleanup() {
@@ -152,7 +152,7 @@ performance_efficiency() {
       measured_durable_lifecycle_gate -- --exact --ignored --nocapture
 
   echo ">> meter evidence: measured durable lifecycle"
-  target/debug/meter test -- --release -p relay --test measured_performance \
+  meter test -- --release -p relay --test measured_performance \
     measured_durable_lifecycle_gate -- --exact --ignored --nocapture
 }
 
@@ -229,14 +229,14 @@ security_guard() {
   security_reload
 
   echo ">> meter evidence: Relay security binaries"
-  target/debug/meter test -- -p relay \
+  meter test -- -p relay \
     --test auth \
     --test service_admission \
     --test raft_peer_mtls \
     --test direct_k8s_assets \
     -- --nocapture
   echo ">> meter evidence: service-auth reload"
-  target/debug/meter test -- \
+  meter test -- \
     --manifest-path "$(bash scripts/faberline-core-test.sh --root)/Cargo.toml" \
     --target-dir "${CARGO_TARGET_DIR:-target}" \
     -p service-auth --lib reload::tests -- --nocapture

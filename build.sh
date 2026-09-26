@@ -3,12 +3,12 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: apps/relay/build.sh <debug|release>
+Usage: ./build.sh <debug|release>
 
 debug    Build relay and install target/debug/relay to ~/.cargo/bin/relay.
 release  Prepare the local release candidate: read the version from
-         apps/relay/Cargo.toml, pin apps/relay/k8s/{base,operator} to
-         relay:<version> and apps/relay/Dockerfile.release to relay@<version>,
+         Cargo.toml, pin k8s/{base,operator} to
+         relay:<version> and Dockerfile.release to relay@<version>,
          build with --release --locked, and install locally. It neither bumps
          the version nor commits.
 
@@ -23,7 +23,7 @@ fail_hint() {
   local mode="$1"
   echo ""
   echo "Build failed."
-  echo "Retry with: apps/relay/build.sh ${mode}"
+  echo "Retry with: ./build.sh ${mode}"
   echo "Verify with: ~/.cargo/bin/relay --version"
 }
 
@@ -48,15 +48,15 @@ trap 'fail_hint "$MODE"' ERR
 # harness override the image by that name (`kustomize edit set image relay=…`),
 # and a registry-qualified pin would silently stop matching that override.
 RELAY_IMAGE_PINS=(
-  apps/relay/k8s/base/statefulset.yaml
-  apps/relay/k8s/operator/deployment.yaml
+  k8s/base/statefulset.yaml
+  k8s/operator/deployment.yaml
 )
 
 # `relay dockerfile render --variant release` substitutes CARGO_PKG_VERSION into
 # exactly these three lines of the committed Dockerfile.release and must
 # reproduce the file byte-for-byte (`cargo test -p relay --test deploy_cli`), so
 # a Cargo.toml bump without this sync turns that test red; this sync is the fix.
-RELAY_DOCKERFILE=apps/relay/Dockerfile.release
+RELAY_DOCKERFILE=Dockerfile.release
 
 install_relay() {
   local profile="$1"
@@ -90,11 +90,11 @@ sync_relay_release_dockerfile() {
   local version="$1" dockerfile="$2"
   RELAY_RELEASE_VERSION="$version" perl -pi -e '
     s#^ARG RELAY_VERSION=.*$#ARG RELAY_VERSION=relay\@$ENV{RELAY_RELEASE_VERSION}#;
-    s#^\#   docker build -f apps/relay/Dockerfile.release -t relay:.*$#\#   docker build -f apps/relay/Dockerfile.release -t relay:$ENV{RELAY_RELEASE_VERSION} \\#;
+    s#^\#   docker build -f Dockerfile.release -t relay:.*$#\#   docker build -f Dockerfile.release -t relay:$ENV{RELAY_RELEASE_VERSION} \\#;
     s#^\#     --build-arg RELAY_VERSION=.*$#\#     --build-arg RELAY_VERSION=relay\@$ENV{RELAY_RELEASE_VERSION} .#;
   ' "$dockerfile"
   if ! grep -Fxq "ARG RELAY_VERSION=relay@${version}" "$dockerfile" \
-    || ! grep -Fxq "#   docker build -f apps/relay/Dockerfile.release -t relay:${version} \\" "$dockerfile" \
+    || ! grep -Fxq "#   docker build -f Dockerfile.release -t relay:${version} \\" "$dockerfile" \
     || ! grep -Fxq "#     --build-arg RELAY_VERSION=relay@${version} ." "$dockerfile"; then
     echo "error: failed to pin ${dockerfile} to relay@${version}" >&2
     return 1
@@ -108,7 +108,7 @@ case "$MODE" in
     echo "next: done"
     ;;
   release)
-    CURRENT_VERSION="$(project_build_read_version apps/relay/Cargo.toml)"
+    CURRENT_VERSION="$(project_build_read_version Cargo.toml)"
     sync_relay_release_image_pins "$CURRENT_VERSION" "${RELAY_IMAGE_PINS[@]}"
     sync_relay_release_dockerfile "$CURRENT_VERSION" "$RELAY_DOCKERFILE"
     cargo build --release --locked -p relay --bin relay

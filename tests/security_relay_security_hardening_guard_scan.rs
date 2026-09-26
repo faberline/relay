@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/external-contracts/security-hardening/security/security-evidence.md#relay-security-hardening-guard-scan
+// SPEC-MANAGED: external-contracts/security-hardening/security/security-evidence.md#relay-security-hardening-guard-scan
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec relay-security-hardening-guard-scan
@@ -7,7 +7,7 @@
 // @contract relay-guard-security-report
 // @category security
 // @required_for_production true
-// @command cd apps/relay && ../../target/debug/vat run guard-security
+// @command vat run guard-security
 // AW-EC-END
 
 // Contract: guard scan over apps/relay reports no untriaged Docker, Kubernetes, or static security findings.
@@ -16,7 +16,7 @@
 #[test]
 #[ignore = "AW EC gate: run via `aw health --verify-ec` or `cargo test -- --ignored`"]
 fn relay_security_hardening_guard_scan() {
-    let command = "cd apps/relay && ../../target/debug/vat run guard-security";
+    let command = "vat run guard-security";
     let id = "relay-security-hardening-guard-scan";
     let mut root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     while !root.join(".aw").is_dir() {

@@ -3,8 +3,8 @@ name = "relay-ec"
 default_runner = "meter-perf"
 
 [workspace]
-base = "../.."
-workdir = "apps/relay"
+base = "."
+workdir = "."
 keep = "always"
 
 [env]
@@ -12,7 +12,7 @@ PATH = "/Users/chrischeng/.rustup/toolchains/stable-aarch64-apple-darwin/bin:/op
 
 [[setup]]
 id = "build-aw-tools"
-cmd = ["cargo", "build", "-p", "meter-cli", "-p", "guard-cli"]
+cmd = ["sh", "-c", "command -v meter >/dev/null && command -v guard >/dev/null || { echo \"install the gate tools: cargo install --locked --git https://github.com/faberline/meter meter-cli; cargo install --locked --git https://github.com/faberline/guard guard-cli\" >&2; exit 1; }"]
 
 [[setup]]
 id = "build-relay-security-ec-tests"
@@ -57,7 +57,7 @@ timeout_s = 600
 [[runners]]
 id = "guard-security"
 cmd = [
-  "../../target/debug/guard",
+  "guard",
   "scan",
   ".",
   "--profile",

@@ -24,7 +24,7 @@ e2e_tests:
     claim_id: request-limit-and-malformed-frame-negative-tests
     contract_id: relay-auth-rbac-and-admission-behavior
     category: behavior
-    command: "bash apps/relay/scripts/ec-evidence.sh security-behavior"
+    command: "bash scripts/ec-evidence.sh security-behavior"
     assertions:
       - "Required auth returns 401 for missing or unknown bearer tokens and 403 when a reader attempts publish or a subject-scoped reader crosses its grant; the streaming consume route enforces the same boundary."
       - "Valid subject writers/readers and wildcard administrators retain their intended publish, lease, ack, heartbeat, and batch behavior, while health, readiness, metrics, OpenAPI, and docs remain tokenless."
@@ -36,7 +36,7 @@ e2e_tests:
     claim_id: network-policy-and-peer-mtls-termination
     contract_id: relay-untrusted-peer-and-restricted-workload-security
     category: security
-    command: "bash apps/relay/scripts/ec-evidence.sh security-boundaries"
+    command: "bash scripts/ec-evidence.sh security-boundaries"
     assertions:
       - "A client that trusts Relay's legitimate server CA but presents an identity signed by an attacker CA is rejected by the required-mTLS server handshake before HTTP or Raft routing."
       - "Peers signed by the trusted CA still elect, replicate, and converge over the authenticated listener."
@@ -48,8 +48,8 @@ e2e_tests:
     claim_id: guard-static-runtime-evidence
     contract_id: relay-guard-security-report
     category: security
-    test_path: apps/relay/tests/security_relay_security_hardening_guard_scan.rs
-    command: "cd apps/relay && ../../target/debug/vat run guard-security"
+    test_path: tests/security_relay_security_hardening_guard_scan.rs
+    command: "vat run guard-security"
     assertions:
       - "guard scan over apps/relay reports no untriaged Docker, Kubernetes, or static security findings."
       - "guard runs the fail-closed evidence driver before attaching Meter evidence from auth, admission, peer-mTLS, direct-Kubernetes, and service-auth reload suites; missing required names, zero execution, a failed control, or an outer-oracle self-test regression makes the runner fail."
@@ -60,7 +60,7 @@ e2e_tests:
     claim_id: bearer-auth-token-registry
     contract_id: relay-security-last-known-good-stability
     category: stability
-    command: "bash apps/relay/scripts/ec-evidence.sh security-stability"
+    command: "bash scripts/ec-evidence.sh security-stability"
     assertions:
       - "A valid registry rotation becomes visible without restarting Relay, invalid JSON/empty/read-failed rotations retain the last-known-good registry, and failure audit classes remain credential-free."
       - "The trusted three-peer required-mTLS group remains able to elect, replicate, converge, and shut down after the negative certificate-rejection case is present."
@@ -75,10 +75,10 @@ tool_contracts:
     tool: guard
     manifest: guard-relay-security.toml
     category: security
-    command: "cd apps/relay && ../../target/debug/vat run guard-security"
+    command: "vat run guard-security"
     native:
       version: 1
       project: relay
       source_contract: relay-security-hardening-guard-scan
-      delegate_command: "cd apps/relay && ../../target/debug/vat run guard-security"
+      delegate_command: "vat run guard-security"
 ```

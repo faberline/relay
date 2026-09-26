@@ -94,34 +94,34 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/relay/tests/raft_peer_mtls.rs
+  - path: tests/raft_peer_mtls.rs
     action: modify
     section: unit-test
     impl_mode: hand-written
     anchor: trusted_relay_peers_replicate_messages_over_mtls
     description: Generalize the material fixture so identity and trust authorities can differ, then bind a required-mTLS server to an ephemeral listener and assert its accept seam rejects a client identity signed by a second CA even though that client trusts the real server CA.
-  - path: apps/relay/tests/direct_k8s_assets.rs
+  - path: tests/direct_k8s_assets.rs
     action: modify
     section: unit-test
     impl_mode: hand-written
     anchor: direct_base_is_a_restricted_durable_singleton
     description: Assert non-root/seccomp/capability-drop container posture, read-only projected registry credentials, NetworkPolicy ingress and peer-port boundaries, and the absence of voter HPA in the production composition.
-  - path: apps/relay/README.md
+  - path: README.md
     action: modify
     section: logic
     impl_mode: hand-written
     description: Set Type SecurityTool, list behavior/security/stability commands, root the remediation at 2175, and include auth, admission, untrusted peer, K8s, and last-known-good evidence.
-  - path: apps/relay/external-contracts/security-hardening/security/security-evidence.md
+  - path: external-contracts/security-hardening/security/security-evidence.md
     action: modify
     section: e2e-test
     impl_mode: hand-written
     description: Add behavior, security, and stability cases; the security case runs every Relay negative suite without filters, and the stability case runs shared reload tests plus Relay adapter and peer-TLS continuity.
-  - path: apps/relay/vat.toml
+  - path: vat.toml
     action: modify
     section: config
     impl_mode: hand-written
     description: Build auth, service_admission, raft_peer_mtls, direct_k8s_assets, and service-auth reload tests, then make guard invoke the fail-closed evidence driver before Meter records the dynamic suites.
-  - path: apps/relay/scripts/ec-evidence.sh
+  - path: scripts/ec-evidence.sh
     action: create
     section: unit-test
     impl_mode: hand-written
@@ -145,37 +145,37 @@ requirements:
     text: "Missing and invalid tokens return 401, insufficient subject grants and streaming scope return 403, exhausted write admission returns 429 with Retry-After, and probes remain available."
     kind: negative
     risk: high
-    verify: bash apps/relay/scripts/ec-evidence.sh security-behavior
+    verify: bash scripts/ec-evidence.sh security-behavior
   deployment_security_posture_executes:
     id: R3
     text: "The direct and production Kubernetes assets prove restricted containers, persistent state, read-only projected credentials, opt-in NetworkPolicy, and no unsafe voter HPA."
     kind: security
     risk: high
-    verify: bash apps/relay/scripts/ec-evidence.sh security-boundaries
+    verify: bash scripts/ec-evidence.sh security-boundaries
   guard_dispatch_includes_dynamic_suite:
     id: R5
     text: "Vat guard scans Relay, the evidence driver requires named tests and non-zero auth, admission, peer-mTLS, K8s, and reload suites, and Meter records the same dynamic surfaces."
     kind: integration
     risk: high
-    verify: cd apps/relay && ../../target/debug/vat run guard-security
+    verify: vat run guard-security
   rotation_and_peer_stability_execute:
     id: R4
     text: "Shared invalid registry reload retains the last-known-good snapshot, Relay valid rotation is live without restart, and trusted peer replication remains usable alongside the rejection path."
     kind: stability
     risk: high
-    verify: bash apps/relay/scripts/ec-evidence.sh security-stability
+    verify: bash scripts/ec-evidence.sh security-stability
   untrusted_identity_fails_server_handshake:
     id: R1
     text: "The peer server rejects an attacker-CA client identity even when the client trusts the legitimate server, and the test observes a server-side TLS handshake error before routing."
     kind: negative
     risk: high
-    verify: bash apps/relay/scripts/ec-evidence.sh security-boundaries
+    verify: bash scripts/ec-evidence.sh security-boundaries
 ---
 flowchart TD
-    r1[R1 untrusted identity fails server handshake] --> bash_apps_relay_scripts_ec_evidence_sh_security_boundaries[bash apps/relay/scripts/ec-evidence.sh security-boundaries]
-    r2[R2 bearer and admission rejections execute] --> bash_apps_relay_scripts_ec_evidence_sh_security_behavior[bash apps/relay/scripts/ec-evidence.sh security-behavior]
-    r3[R3 deployment security posture executes] --> bash_apps_relay_scripts_ec_evidence_sh_security_boundaries[bash apps/relay/scripts/ec-evidence.sh security-boundaries]
-    r4[R4 rotation and peer stability execute] --> bash_apps_relay_scripts_ec_evidence_sh_security_stability[bash apps/relay/scripts/ec-evidence.sh security-stability]
-    r5[R5 guard dispatch includes dynamic suite] --> cd_apps_relay_target_debug_vat_run_guard_security[cd apps/relay && ../../target/debug/vat run guard-security]
+    r1[R1 untrusted identity fails server handshake] --> bash_apps_relay_scripts_ec_evidence_sh_security_boundaries[bash scripts/ec-evidence.sh security-boundaries]
+    r2[R2 bearer and admission rejections execute] --> bash_apps_relay_scripts_ec_evidence_sh_security_behavior[bash scripts/ec-evidence.sh security-behavior]
+    r3[R3 deployment security posture executes] --> bash_apps_relay_scripts_ec_evidence_sh_security_boundaries[bash scripts/ec-evidence.sh security-boundaries]
+    r4[R4 rotation and peer stability execute] --> bash_apps_relay_scripts_ec_evidence_sh_security_stability[bash scripts/ec-evidence.sh security-stability]
+    r5[R5 guard dispatch includes dynamic suite] --> cd_apps_relay_target_debug_vat_run_guard_security[vat run guard-security]
     r6[R6 agent review and ec verification close] --> aw_ec_check_project_relay_aw_ec_gen_project_relay_verify_aw_ec_verify_project_relay[aw ec check --project relay && aw ec gen --project relay --verify && aw ec verify --project relay]
 ```

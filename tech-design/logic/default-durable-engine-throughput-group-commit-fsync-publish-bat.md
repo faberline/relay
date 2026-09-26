@@ -215,42 +215,42 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/relay/src/log.rs
+  - path: src/log.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "append_many: write a batch of entries then issue ONE sync_all (group commit). Persist/load the committed-offset sidecar (<subject>__shardN.commit), group-committed."
-  - path: apps/relay/src/workqueue.rs
+  - path: src/workqueue.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "recover(committed): set next_offer and committed watermark on open so committed entries are never re-offered."
-  - path: apps/relay/src/engine.rs
+  - path: src/engine.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "publish_batch (group-commit append_many); recover the committed offset when a subject opens; persist the committed offset after ack / ack-batch."
-  - path: apps/relay/src/config.rs
+  - path: src/config.rs
     action: modify
     section: config
     impl_mode: hand-written
     reason: "Default to durable, power-safe storage (data_dir set, fsync = Always); group commit makes the batch path cheap."
-  - path: apps/relay/src/wire.rs
+  - path: src/wire.rs
     action: modify
     section: schema
     impl_mode: hand-written
     reason: "PublishBatchItem / PublishBatchRequest / PublishBatchResponse DTOs."
-  - path: apps/relay/src/server.rs
+  - path: src/server.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "POST /v1/{subject}/publish-batch handler (JSON + CBOR)."
-  - path: apps/relay/src/openapi.rs
+  - path: src/openapi.rs
     action: modify
     section: rest-api
     impl_mode: hand-written
     reason: "Add the publish-batch path to the served OpenAPI."
-  - path: apps/relay/tests/durable.rs
+  - path: tests/durable.rs
     action: create
     section: unit-test
     impl_mode: hand-written

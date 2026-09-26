@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/competitor-perf-gate-vs-rabbitmq-nats-redis-work-queue-ratchet.md#logic
+// SPEC-MANAGED: tech-design/logic/competitor-perf-gate-vs-rabbitmq-nats-redis-work-queue-ratchet.md#logic
 // HANDWRITE-BEGIN gap="missing-generator:logic:d33f5c3d" tracker="pending-tracker" reason="The ratchet gate rule: evaluate per-cell ratios against the recorded baseline (no-regression) plus must-beat, returning a pass/fail verdict."
 //! Competitor perf-gate ratchet rule (#125).
 //!
@@ -11,7 +11,7 @@
 
 /// One cell's measured standing for relay against its competitors.
 ///
-/// @spec apps/relay/tech-design/logic/competitor-perf-gate-vs-rabbitmq-nats-redis-work-queue-ratchet.md#logic
+/// @spec tech-design/logic/competitor-perf-gate-vs-rabbitmq-nats-redis-work-queue-ratchet.md#logic
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cell {
     /// Cell name (e.g. `work_queue`).
@@ -26,7 +26,7 @@ pub struct Cell {
 
 /// The gate decision over all cells.
 ///
-/// @spec apps/relay/tech-design/logic/competitor-perf-gate-vs-rabbitmq-nats-redis-work-queue-ratchet.md#logic
+/// @spec tech-design/logic/competitor-perf-gate-vs-rabbitmq-nats-redis-work-queue-ratchet.md#logic
 #[derive(Debug, Clone, PartialEq)]
 pub struct Verdict {
     pub passed: bool,
@@ -40,7 +40,7 @@ pub struct Verdict {
 /// `baseline_ratio * ratchet`, or when it is a must-beat cell and relay is no
 /// longer ahead (`ratio < 1.0`). The gate passes only when no cell fails.
 ///
-/// @spec apps/relay/tech-design/logic/competitor-perf-gate-vs-rabbitmq-nats-redis-work-queue-ratchet.md#logic
+/// @spec tech-design/logic/competitor-perf-gate-vs-rabbitmq-nats-redis-work-queue-ratchet.md#logic
 pub fn evaluate(cells: &[Cell], ratchet: f64) -> Verdict {
     let mut regressions = Vec::new();
     let mut must_beat_losses = Vec::new();

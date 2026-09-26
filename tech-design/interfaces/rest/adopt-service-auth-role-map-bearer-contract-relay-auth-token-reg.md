@@ -159,42 +159,42 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/relay/Cargo.toml
+  - path: Cargo.toml
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Add the service-auth path dependency (shared bearer middleware, role_map StaticRoleMapVerifier, registry loader, shared 401/403 error shape)."
-  - path: apps/relay/src/auth.rs
+  - path: src/auth.rs
     action: create
     section: logic
     impl_mode: hand-written
     description: "relay's service-auth adapter: AuthConfig (RELAY_AUTH off|disabled|required mode parse + token-registry load via service_auth::load_registry with startup fail-fast naming RELAY_TOKEN_REGISTRY_FILE), StaticRoleMapVerifier construction (registry when required, open() when off), and the per-handler-group authorize(principal, subject, needed) helper mapping RoleMapDenied to the shared 403 forbidden shape."
-  - path: apps/relay/src/lib.rs
+  - path: src/lib.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Register pub mod auth in the crate root module wiring."
-  - path: apps/relay/src/server.rs
+  - path: src/server.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "AppState carries Arc<StaticRoleMapVerifier> (AppState::new stays open for tokenless dev/tests; AppState::with_auth takes the resolved AuthConfig); router() route_layers service_auth::auth_middleware on the /v1 data-plane router ONLY (probes stay exempt; metrics::track stays outermost so auth rejections are still counted); every data-plane handler gains the Extension<RoleMapPrincipal> and enforces write (publish/publish-batch) or read (lease/ack/lease-batch/ack-batch/heartbeat/len) on the {subject} path param via auth::authorize."
-  - path: apps/relay/src/consume.rs
+  - path: src/consume.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "The streaming consume handler takes the Extension<RoleMapPrincipal> and enforces a read grant on its subject before reading the Subscribe handshake."
-  - path: apps/relay/src/bin/relay.rs
+  - path: src/bin/relay.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "ServeArgs gains --auth (env RELAY_AUTH, off|required, default off) and --token-registry-file (env RELAY_TOKEN_REGISTRY_FILE) with env fallback like --bind; serve_main resolves AuthConfig (fail fast: nonzero exit on a bad/missing registry under required) and builds AppState::with_auth; cli_parse_surface covers the new flags."
-  - path: apps/relay/src/llm.rs
+  - path: src/llm.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "The operations topic documents RELAY_AUTH / RELAY_TOKEN_REGISTRY_FILE, the registry JSON shape + role model (publish=write, consume=read, wildcard *, admin>=write>=read), the tokenless probe surface, and the client RELAY_URL + RELAY_TOKEN bearer contract."
-  - path: apps/relay/tests/auth.rs
+  - path: tests/auth.rs
     action: create
     section: unit-test
     impl_mode: hand-written

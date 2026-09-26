@@ -752,9 +752,9 @@ fn render_release_dockerfile(version: Option<&str>) -> String {
         cli_std::artifact::strip_source_ownership_markers(include_str!("../../Dockerfile.release"));
     let mut out = String::new();
     for line in template.lines() {
-        if line.starts_with("#   docker build -f apps/relay/Dockerfile.release -t relay:") {
+        if line.starts_with("#   docker build -f Dockerfile.release -t relay:") {
             out.push_str(&format!(
-                "#   docker build -f apps/relay/Dockerfile.release -t relay:{version} \\"
+                "#   docker build -f Dockerfile.release -t relay:{version} \\"
             ));
         } else if line.starts_with("#     --build-arg RELAY_VERSION=") {
             out.push_str(&format!("#     --build-arg RELAY_VERSION={tag} ."));

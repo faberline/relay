@@ -284,42 +284,42 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/relay/src/workqueue.rs
+  - path: src/workqueue.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "O(1) next-eligible cursor (next_offer + redeliver BinaryHeap) replacing the O(n) scan; committed watermark advanced incrementally; add lease_batch and ack_batch. Phase 5: replace the monotonic next_offer cursor with PRIORITY_BANDS bands (each a fresh VecDeque + redeliver min-heap); pick scans bands high->low (O(bands)); offer_fresh(seq, priority) feeds entries in at publish; priority_of routes reclaim/promote/release into the right band; LogEntry/PublishRequest gain priority (recovery rebuilds bands from persisted priority)."
-  - path: apps/relay/src/engine.rs
+  - path: src/engine.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Per-(subject,shard) locking: subjects behind RwLock<HashMap<String, Arc<Mutex<SubjectState>>>>; methods take &self with interior locking; add lease_batch / ack_batch; reconcile locks each shard independently. Phase 5: publish/publish_batch offer_fresh each new entry into its priority band (publish_at gains a priority arg); recovery offer_fresh/register_delayed the un-acked tail with each entry's persisted priority."
-  - path: apps/relay/src/wire.rs
+  - path: src/wire.rs
     action: modify
     section: schema
     impl_mode: hand-written
     reason: "LeaseBatchRequest/Response, AckOne, AckBatchRequest/Response DTOs."
-  - path: apps/relay/src/server.rs
+  - path: src/server.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "AppState holds Arc<Relay> (no global mutex); add POST lease-batch / ack-batch handlers (JSON + CBOR)."
-  - path: apps/relay/src/openapi.rs
+  - path: src/openapi.rs
     action: modify
     section: rest-api
     impl_mode: hand-written
     reason: "Add lease-batch and ack-batch paths to the served OpenAPI."
-  - path: apps/relay/src/reconciler.rs
+  - path: src/reconciler.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "spawn_reconciler takes Arc<Relay> (engine is now internally synchronized)."
-  - path: apps/relay/tests/work_queue_throughput.rs
+  - path: tests/work_queue_throughput.rs
     action: create
     section: unit-test
     impl_mode: hand-written
     reason: "Tests: O(1) cursor ordering, prefer-redeliver, committed watermark, lease-batch/ack-batch, and per-subject concurrency isolation."
-  - path: apps/relay/tests/priority.rs
+  - path: tests/priority.rs
     action: create
     section: unit-test
     impl_mode: hand-written

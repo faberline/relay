@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/external-contracts/security-hardening/security/security-evidence.md#relay-security-hardening-rotation-and-peer-stability
+// SPEC-MANAGED: external-contracts/security-hardening/security/security-evidence.md#relay-security-hardening-rotation-and-peer-stability
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec relay-security-hardening-rotation-and-peer-stability
@@ -7,7 +7,7 @@
 // @contract relay-security-last-known-good-stability
 // @category stability
 // @required_for_production true
-// @command bash apps/relay/scripts/ec-evidence.sh security-stability
+// @command bash scripts/ec-evidence.sh security-stability
 // AW-EC-END
 
 // Contract: A valid registry rotation becomes visible without restarting Relay, invalid JSON/empty/read-failed rotations retain the last-known-good registry, and failure audit classes remain credential-free.
@@ -16,7 +16,7 @@
 #[test]
 #[ignore = "AW EC gate: run via `aw health --verify-ec` or `cargo test -- --ignored`"]
 fn relay_security_hardening_rotation_and_peer_stability() {
-    let command = "bash apps/relay/scripts/ec-evidence.sh security-stability";
+    let command = "bash scripts/ec-evidence.sh security-stability";
     let id = "relay-security-hardening-rotation-and-peer-stability";
     let mut root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     while !root.join(".aw").is_dir() {

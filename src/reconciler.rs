@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
+// SPEC-MANAGED: tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
 // HANDWRITE-BEGIN gap="missing-generator:logic:c26b5730" tracker="pending-tracker" reason="Background reconciler: spawn_reconciler(relay, interval) ticks and calls reconcile; ReconcilerHandle to stop it."
 //! Background work-queue liveness sweep.
 //!
@@ -18,7 +18,7 @@ use crate::raft::RelayRaft;
 /// Handle to a running reconciler; drop or [`stop`](ReconcilerHandle::stop) to
 /// end the background sweep.
 ///
-/// @spec apps/relay/tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
+/// @spec tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
 pub struct ReconcilerHandle {
     task: tokio::task::JoinHandle<()>,
 }
@@ -39,7 +39,7 @@ impl Drop for ReconcilerHandle {
 /// Spawn a background task that reclaims expired leases across all subjects
 /// every `interval`.
 ///
-/// @spec apps/relay/tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
+/// @spec tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#logic
 pub fn spawn_reconciler(relay: Arc<Relay>, interval: Duration) -> ReconcilerHandle {
     let task = tokio::spawn(async move {
         let mut tick = tokio::time::interval(interval);

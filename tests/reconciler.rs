@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#unit-test
+// SPEC-MANAGED: tech-design/logic/reconciler-lease-reclaim-redeliver-liveness.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:361a28a7" tracker="pending-tracker" reason="Tests: dead-worker redeliver + complete, late-ack fenced, live-worker kept, frontier-only, background-task auto-reclaim."
 //! Reconciler tests (#109): a dead worker's lease is reclaimed and redelivered
 //! (epoch-fenced), a live worker is kept, only the in-flight frontier is swept,

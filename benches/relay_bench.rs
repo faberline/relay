@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/competitor-perf-gate-vs-rabbitmq-nats-redis-work-queue-ratchet.md#unit-test
+// SPEC-MANAGED: tech-design/logic/competitor-perf-gate-vs-rabbitmq-nats-redis-work-queue-ratchet.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:9056e8a0" tracker="pending-tracker" reason="criterion benchmarks for relay publish throughput and work-queue lease+ack cycle (the relay-side measurement)."
 //! relay-side measurement for the competitor perf-gate (#125): the two gate
 //! cells benched against the in-process core (single-cast work-queue broker;

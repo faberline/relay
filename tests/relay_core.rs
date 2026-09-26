@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#unit-test
+// SPEC-MANAGED: tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:ac3b11e2" tracker="pending-tracker" reason="Deterministic tests for the unit-test plan, including the #122 acceptance (both delivery models over the same log)."
 //! Deterministic tests for the relay core, mapping 1:1 to the unit-test plan in
 //! the TD: sequencing, idempotency, broadcast fan-out + replay-from-seq,

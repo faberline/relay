@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/external-contracts/security-hardening/security/security-evidence.md#relay-security-hardening-negative-peer-and-kubernetes-boundaries
+// SPEC-MANAGED: external-contracts/security-hardening/security/security-evidence.md#relay-security-hardening-negative-peer-and-kubernetes-boundaries
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec relay-security-hardening-negative-peer-and-kubernetes-boundaries
@@ -7,7 +7,7 @@
 // @contract relay-untrusted-peer-and-restricted-workload-security
 // @category security
 // @required_for_production true
-// @command bash apps/relay/scripts/ec-evidence.sh security-boundaries
+// @command bash scripts/ec-evidence.sh security-boundaries
 // AW-EC-END
 
 // Contract: A client that trusts Relay's legitimate server CA but presents an identity signed by an attacker CA is rejected by the required-mTLS server handshake before HTTP or Raft routing.
@@ -17,7 +17,7 @@
 #[test]
 #[ignore = "AW EC gate: run via `aw health --verify-ec` or `cargo test -- --ignored`"]
 fn relay_security_hardening_negative_peer_and_kubernetes_boundaries() {
-    let command = "bash apps/relay/scripts/ec-evidence.sh security-boundaries";
+    let command = "bash scripts/ec-evidence.sh security-boundaries";
     let id = "relay-security-hardening-negative-peer-and-kubernetes-boundaries";
     let mut root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     while !root.join(".aw").is_dir() {

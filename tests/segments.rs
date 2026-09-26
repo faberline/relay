@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/log-segment-rotation-retention-full-log-lifecycle.md#unit-test
+// SPEC-MANAGED: tech-design/logic/log-segment-rotation-retention-full-log-lifecycle.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:b8e02453" tracker="pending-tracker" reason="Tests: rotation into multiple segment files + ordered range across them, byte-based pruning advancing start_seq, reads of pruned seqs (None / clamp), multi-segment recovery on reopen, and single-segment parity at default sizes."
 //! Log segment rotation + retention (#131): rolling into segment files, ordered
 //! reads across segments, byte-based pruning that advances start_seq, pruned

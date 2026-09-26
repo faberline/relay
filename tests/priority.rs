@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/work-queue-throughput-per-shard-lock-o-1-lease-cursor-batch-leas.md#unit-test
+// SPEC-MANAGED: tech-design/logic/work-queue-throughput-per-shard-lock-o-1-lease-cursor-batch-leas.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:priority-bands" tracker="pending-tracker" reason="Tests: u8 priority bands — higher priority leases first, default priority is 10, batch publish preserves per-message priority, same-band order is FIFO, and u8::MAX is the top band."
 //! Work-queue priority bands (Phase 5): `pick` scans bands high → low, so a
 //! higher-priority entry leases before a lower one even if published later;

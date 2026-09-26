@@ -11,10 +11,10 @@ visibility, h2c/OpenAPI transport, and raft-backed HA. Payloads stay opaque JSON
 so higher-level systems (loom, worker runtimes) use relay without relay learning
 their domain model.
 
-Relay is the pull side of Axiom's queue family; [`defer`](../defer) is the push
+Relay is the pull side of Axiom's queue family; [`defer`](https://github.com/faberline/defer/blob/main) is the push
 side for scheduled HTTP dispatch. Relay is deliberately **not** a Kafka/pub-sub
-platform: durable topic replay/retention is [`tape`](../tape)'s job, and
-push/ETA task dispatch is [`defer`](../defer)'s. Concurrency is
+platform: durable topic replay/retention is [`tape`](https://github.com/faberline/tape/blob/main)'s job, and
+push/ETA task dispatch is [`defer`](https://github.com/faberline/defer/blob/main)'s. Concurrency is
 **client-driven** — more workers = more throughput; relay has no server-side
 rate/concurrency governor (that is `defer`). Tenancy is a deployment concern —
 relay is single-tenant per deployment; run one per tenant (k8s namespace). See
@@ -64,8 +64,8 @@ dogfooded through a Kubernetes kind failover smoke. Auto-mode takes no flags —
 downward-API env (`REPLICAS_PER_SHARD` > 1) flips replica mode.
 
 - Gate: `cargo test -p relay --test raft_core --test raft_persistence --test raft_cluster`
-- Dogfood: `apps/relay/scripts/kind-failover-smoke.sh`
-- Source: `apps/relay/src/raft.rs`, [`HA.md`](HA.md)
+- Dogfood: `scripts/kind-failover-smoke.sh`
+- Source: `src/raft.rs`, [`HA.md`](HA.md)
 
 ### Interface
 
@@ -88,7 +88,7 @@ Gate: `cargo test -p relay --test worker_loop --test spec_cli --test deploy_cli 
 
 A polyglot h2c/OpenAPI contract so non-Rust workers can publish, consume, lease,
 heartbeat, and ack. The served `/openapi.json` and the offline `relay spec` are
-twins of the same contract; `apps/relay/docs/worker-protocol.md` is the endpoint
+twins of the same contract; `docs/worker-protocol.md` is the endpoint
 summary.
 
 - Gate: `cargo test -p relay --test http2_transport --test worker_loop --test spec_cli`
@@ -130,8 +130,8 @@ CRD/operator/instance/dockerfile render verbs whose committed files are
 byte-equal fixtures, and a kind failover path for deployment dogfood.
 
 - Gate: `cargo test -p relay --test deploy_cli --test operator --test direct_k8s_assets --test raft_config`
-- Dogfood: `apps/relay/scripts/kind-failover-smoke.sh`
-- Assets: `apps/relay/k8s`
+- Dogfood: `scripts/kind-failover-smoke.sh`
+- Assets: `k8s`
 
 #### Long-running stability
 
@@ -146,7 +146,7 @@ errors, RSS 14,352 → 14,352 KiB, FD 14 → 14, threads 11 → 11, inspect p99
 1 → 1 ms.
 
 - Gate: `cargo test -p relay --test durable --test segments --test reconciler --test raft_persistence --test raft_cluster --test backup`
-- Soak: `RELAY_SOAK_AUTOSTART=1 bash apps/relay/scripts/soak.sh`
+- Soak: `RELAY_SOAK_AUTOSTART=1 bash scripts/soak.sh`
 
 #### Security hardening
 
@@ -162,10 +162,10 @@ NetworkPolicy in Kubernetes. The request-body cap (#2556) returns 413 with the
 structured `payload_too_large` envelope, and a refused publish never reaches the
 engine.
 
-- Behavior: `bash apps/relay/scripts/ec-evidence.sh security-behavior`
-- Boundaries: `bash apps/relay/scripts/ec-evidence.sh security-boundaries`
-- Stability: `bash apps/relay/scripts/ec-evidence.sh security-stability`
-- Static + runtime scan: `cd apps/relay && vat run guard-security`
+- Behavior: `bash scripts/ec-evidence.sh security-behavior`
+- Boundaries: `bash scripts/ec-evidence.sh security-boundaries`
+- Stability: `bash scripts/ec-evidence.sh security-stability`
+- Static + runtime scan: `vat run guard-security`
 
 #### Stateful service workload
 
@@ -195,11 +195,11 @@ RabbitMQ, NATS JetStream, Redis Streams, and Dragonfly comparisons are
 **advisory dogfood**, not a required gate, until equivalent real-service
 calibration is promoted. Claims remain workload-scoped.
 
-- Behavior: `bash apps/relay/scripts/ec-evidence.sh performance-behavior`
-- Efficiency: `bash apps/relay/scripts/ec-evidence.sh performance-efficiency`
-- Throughput ratchet: `cd apps/relay && vat run meter-perf`
+- Behavior: `bash scripts/ec-evidence.sh performance-behavior`
+- Efficiency: `bash scripts/ec-evidence.sh performance-efficiency`
+- Throughput ratchet: `vat run meter-perf`
 - Comparison harness: `cargo run -p relay --release --example bench_compare -- --backend <target>`
   (advisory ratio wrapper: `apps/arena/examples/relay-vs-rabbitmq-nats-redis.toml`)
 
 Last real Relay/RabbitMQ/NATS bulk lifecycle calibration: 2026-07-17, recorded
-in `apps/relay/docs/perf-gate.md`.
+in `docs/perf-gate.md`.

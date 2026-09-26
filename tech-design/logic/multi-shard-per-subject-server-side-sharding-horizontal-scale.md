@@ -87,12 +87,12 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/relay/src/engine.rs
+  - path: src/engine.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Key subjects by (subject, shard); store shards = config.default_shards. publish/publish_batch route by crc32(message_id) % shards (reuse shard::shard_for); lease/lease_batch scan shards from a rotating start (whole subject drains exactly-once); ack/ack_batch/heartbeat/release route by scanning shards for the shard owning the lease_id; reconcile sweeps every (subject,shard) independently. committed_offset reads shard 0 (offsets are per-shard). default_shards=1 => shard 0 only => identical behavior."
-  - path: apps/relay/tests/multi_shard.rs
+  - path: tests/multi_shard.rs
     action: create
     section: unit-test
     impl_mode: hand-written

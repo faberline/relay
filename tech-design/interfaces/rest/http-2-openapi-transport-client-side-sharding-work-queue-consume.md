@@ -777,52 +777,52 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/relay/Cargo.toml
+  - path: Cargo.toml
     action: modify
     section: config
     impl_mode: hand-written
     reason: "Add axum/tokio/utoipa/ciborium/crc32fast/tower-http deps and the relay-server binary target."
-  - path: apps/relay/src/lib.rs
+  - path: src/lib.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Wire in the transport modules (wire, shard, server, server_config, openapi, consume) and re-export them."
-  - path: apps/relay/src/wire.rs
+  - path: src/wire.rs
     action: create
     section: schema
     impl_mode: hand-written
     reason: "Transport DTOs (PublishRequest/Response, PublishBatchRequest/Response, LeaseRequest/Response, AckRequest/Response, Heartbeat/LeaseBatch/AckBatch DTOs) plus application/cbor encode/decode and a general length-prefixed CBOR framing utility."
-  - path: apps/relay/src/consume.rs
+  - path: src/consume.rs
     action: create
     section: logic
     impl_mode: hand-written
     reason: "The primary streaming work-queue consume path: one bidi h2 stream, ConsumeUp (Subscribe/Ack/Nack) up-frames and LeasedEntry down-frames, length-prefixed JSON, bounded by the Subscribe prefetch credit window; wakes on publish/release instead of polling (#465)."
-  - path: apps/relay/src/shard.rs
+  - path: src/shard.rs
     action: create
     section: logic
     impl_mode: hand-written
     reason: "Client-side sharding helper: shard_for(key, shards) = crc32(key) % shards."
-  - path: apps/relay/src/server_config.rs
+  - path: src/server_config.rs
     action: create
     section: config
     impl_mode: hand-written
     reason: "RelayServerConfig per the Config contract (bind, h2c, shards, reconcile_interval_ms, embedded RelayCoreConfig)."
-  - path: apps/relay/src/server.rs
+  - path: src/server.rs
     action: create
     section: logic
     impl_mode: hand-written
     reason: "axum h2c app: shared AppState over the relay core; publish/publish-batch and the deprecated-but-retained lease/ack/lease-batch/ack-batch/heartbeat handlers (JSON + CBOR); routes /consume to consume.rs."
-  - path: apps/relay/src/openapi.rs
+  - path: src/openapi.rs
     action: create
     section: rest-api
     impl_mode: hand-written
     reason: "utoipa OpenAPI document for the public endpoints, served at /openapi.json."
-  - path: apps/relay/src/bin/relay_server.rs
+  - path: src/bin/relay_server.rs
     action: create
     section: logic
     impl_mode: hand-written
     reason: "relay-server binary entrypoint: load config, build the app, serve h2c."
-  - path: apps/relay/tests/http2_transport.rs
+  - path: tests/http2_transport.rs
     action: create
     section: unit-test
     impl_mode: hand-written

@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/competitor-perf-gate-vs-rabbitmq-nats-redis-work-queue-ratchet.md#unit-test
+// SPEC-MANAGED: tech-design/logic/competitor-perf-gate-vs-rabbitmq-nats-redis-work-queue-ratchet.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:b7f01a68" tracker="pending-tracker" reason="Tests for the ratchet rule (holds / regresses / must-beat lost) and a small-scale smoke of the benched workloads."
 //! Perf-gate ratchet rule (#125) plus a small-scale smoke that keeps the two
 //! benched gate workloads honest in CI without any competitor running.

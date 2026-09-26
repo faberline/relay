@@ -41,7 +41,7 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/relay/README.md
+  - path: README.md
     action: modify
     section: logic
     impl_mode: hand-written

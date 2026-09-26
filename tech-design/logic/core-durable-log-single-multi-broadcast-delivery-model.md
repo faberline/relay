@@ -352,47 +352,47 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/relay/Cargo.toml
+  - path: Cargo.toml
     action: create
     section: config
     impl_mode: hand-written
     reason: "New relay crate manifest for the standalone HTTP/2 queue core (no external project deps)."
-  - path: apps/relay/src/lib.rs
+  - path: src/lib.rs
     action: create
     section: logic
     impl_mode: hand-written
     reason: "Crate root: module wiring and public re-exports for the in-process core (single-cast work-queue only; no broadcast/replication modules)."
-  - path: apps/relay/src/types.rs
+  - path: src/types.rs
     action: create
     section: schema
     impl_mode: hand-written
     reason: "Core data model (LogEntry, Seq, MessageId, AppendOutcome, Lease, CommittedOffset) per the Schema contract."
-  - path: apps/relay/src/config.rs
+  - path: src/config.rs
     action: create
     section: config
     impl_mode: hand-written
     reason: "RelayCoreConfig per the Config contract; RetentionConfig is delete-on-ack only (max_age_secs/max_bytes_per_shard are reserved future hard-cap knobs, not an alternate pruning mode)."
-  - path: apps/relay/src/log.rs
+  - path: src/log.rs
     action: create
     section: logic
     impl_mode: hand-written
     reason: "Durable ordered log substrate: append with deterministic-id dedupe, monotonic seq, RAM ring + disk segment persistence, ordered read, and truncate_below_acked (delete-on-ack GC)."
-  - path: apps/relay/src/workqueue.rs
+  - path: src/workqueue.rs
     action: create
     section: logic
     impl_mode: hand-written
     reason: "Work-queue competing-consumer delivery: lease / ack / redeliver, delay index, priority bands, dead-lettering, and committed offset (standard at-least-once lease / retry semantics)."
-  - path: apps/relay/src/engine.rs
+  - path: src/engine.rs
     action: create
     section: logic
     impl_mode: hand-written
     reason: "Relay core engine tying publish -> durable append -> single-cast work-queue lease/ack/redeliver over one durable log. ack/ack_batch persist the committed watermark then truncate the fully-acked segment prefix (persist-before-truncate ordering, H1)."
-  - path: apps/relay/src/consume.rs
+  - path: src/consume.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Streaming consume drive leases/acks/nacks entries from the subject's single work-queue."
-  - path: apps/relay/tests/relay_core.rs
+  - path: tests/relay_core.rs
     action: create
     section: unit-test
     impl_mode: hand-written

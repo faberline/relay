@@ -155,62 +155,62 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/relay/src/engine.rs
+  - path: src/engine.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Add Relay::reconcile(now): sweep every subject/shard's expired leases (frontier-only) and return the count reclaimed; also promote_due per shard (release delayed/ETA entries that came due) and wake those subjects. Add publish_at(.., not_before, ..) that durably appends then register_delayed for a future-dated entry; publish delegates with None. Recovery (shard_state) rebuilds the in-memory delay index by scanning the un-acked tail for not_before."
-  - path: apps/relay/src/workqueue.rs
+  - path: src/workqueue.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Delay index: delayed min-heap (by visible-at millis) + delayed_set; register_delayed(seq, visible_at) holds an entry back; promote_due(now) releases due entries onto the redeliver heap (returns count); pick skips delayed seqs; lease/lease_or_dead call promote_due(now) first. reclaim_expired re-offers via register_delayed with exponential backoff (redeliver_backoff_ms * 2^(attempt-1), capped) unless backoff=0 or the entry is exhausted (then immediate); WorkQueue::new gains redeliver_backoff_ms."
-  - path: apps/relay/src/types.rs
+  - path: src/types.rs
     action: modify
     section: schema
     impl_mode: hand-written
     reason: "LogEntry gains optional not_before (work-queue visibility gate; serde default = back-compatible with existing segments)."
-  - path: apps/relay/src/wire.rs
+  - path: src/wire.rs
     action: modify
     section: schema
     impl_mode: hand-written
     reason: "PublishRequest gains optional not_before + delay_ms (countdown)."
-  - path: apps/relay/tests/delayed_delivery.rs
+  - path: tests/delayed_delivery.rs
     action: create
     section: unit-test
     impl_mode: hand-written
     reason: "Tests: delayed entry withheld until due (immediate sibling leases at once), reconcile promotes a due entry, and the delay survives a restart."
-  - path: apps/relay/tests/reconciler.rs
+  - path: tests/reconciler.rs
     action: modify
     section: unit-test
     impl_mode: hand-written
     reason: "Add redelivery_backoff_is_exponential: a reclaimed lease is withheld for the backoff window and re-leases only after it, doubling per attempt. Existing redeliver tests pin redeliver_backoff_ms=0."
-  - path: apps/relay/src/reconciler.rs
+  - path: src/reconciler.rs
     action: create
     section: logic
     impl_mode: hand-written
     reason: "Background reconciler: spawn_reconciler(relay, interval) ticks and calls reconcile; ReconcilerHandle to stop it."
-  - path: apps/relay/src/server.rs
+  - path: src/server.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Expose AppState::relay_handle() so the server can hand the shared core to the reconciler."
-  - path: apps/relay/src/server_config.rs
+  - path: src/server_config.rs
     action: modify
     section: config
     impl_mode: hand-written
     reason: "Add reconcile_interval_ms."
-  - path: apps/relay/src/lib.rs
+  - path: src/lib.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Declare and re-export the reconciler module."
-  - path: apps/relay/src/bin/relay_server.rs
+  - path: src/bin/relay_server.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Start the background reconciler before serving."
-  - path: apps/relay/tests/reconciler.rs
+  - path: tests/reconciler.rs
     action: create
     section: unit-test
     impl_mode: hand-written

@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/adopt-raft-host-relaystatemachine-auto-mode-ha-drop-hand-rolled.md#unit-test
+// SPEC-MANAGED: tech-design/logic/adopt-raft-host-relaystatemachine-auto-mode-ha-drop-hand-rolled.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:b72bd304" tracker="pending-tracker" reason="Deterministic in-process simulation driving raft_core directly (dev-dependency, #544 — relay no longer re-exports the consensus core): leader election, replicate+commit ordering, kill-leader -> re-elect with no committed loss, learner semantics, stale higher-term step-down, and the relay-integration scenario (command=publish, apply=relay engine) that converges across a leader failover."
 //! Single-shard Raft core (#136): a deterministic in-process simulation. A
 //! message bus pumps every node's outbox to its target's handler until

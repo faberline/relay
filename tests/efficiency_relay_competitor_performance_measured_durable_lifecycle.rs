@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/external-contracts/competitor-performance/efficiency/perf-gate.md#relay-competitor-performance-measured-durable-lifecycle
+// SPEC-MANAGED: external-contracts/competitor-performance/efficiency/perf-gate.md#relay-competitor-performance-measured-durable-lifecycle
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec relay-competitor-performance-measured-durable-lifecycle
@@ -7,7 +7,7 @@
 // @contract relay-measured-durable-lifecycle-envelope
 // @category efficiency
 // @required_for_production true
-// @command bash apps/relay/scripts/ec-evidence.sh performance-efficiency
+// @command bash scripts/ec-evidence.sh performance-efficiency
 // AW-EC-END
 
 // Contract: A report-only child process uses temporary disk storage with FsyncPolicy::Always to publish and then lease/ack exactly 2,000 128-byte payloads in 100-message batches.
@@ -18,7 +18,7 @@
 #[test]
 #[ignore = "AW EC gate: run via `aw health --verify-ec` or `cargo test -- --ignored`"]
 fn relay_competitor_performance_measured_durable_lifecycle() {
-    let command = "bash apps/relay/scripts/ec-evidence.sh performance-efficiency";
+    let command = "bash scripts/ec-evidence.sh performance-efficiency";
     let id = "relay-competitor-performance-measured-durable-lifecycle";
     let mut root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     while !root.join(".aw").is_dir() {

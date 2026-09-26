@@ -118,12 +118,12 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/relay/src/log.rs
+  - path: src/log.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Segment the NDJSON store: an ordered Vec<Segment{base_seq,path,bytes,last_ts}>; the active segment rolls at segment_bytes (base_seq = len). offsets[seq] becomes the byte offset within the seq's segment (segment located by base_seq). entry/range clamp to start_seq and read across segment runs. Recovery replays all surviving segments in order. Retention is delete-on-ack only: truncate_below_acked(watermark) drops the oldest whole segments whose end <= the durable committed watermark, advancing start_seq, with an un-acked hole pinning the head; there is no wall-clock/size prune."
-  - path: apps/relay/tests/segments.rs
+  - path: tests/segments.rs
     action: create
     section: unit-test
     impl_mode: hand-written

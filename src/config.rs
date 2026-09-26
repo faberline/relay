@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
+// SPEC-MANAGED: tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
 // HANDWRITE-BEGIN gap="missing-generator:config:1758bf38" tracker="pending-tracker" reason="RelayCoreConfig per the Config contract."
 //! In-process broker core engine settings.
 //!
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 /// Durability flush policy for the on-disk log segments.
 ///
-/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
+/// @spec tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FsyncPolicy {
@@ -25,7 +25,7 @@ pub enum FsyncPolicy {
 
 /// Idempotent at-least-once append window: how long a `MessageId` is remembered.
 ///
-/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
+/// @spec tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DedupeConfig {
     /// `MessageId`s retained per shard for duplicate detection.
@@ -46,7 +46,7 @@ impl Default for DedupeConfig {
 /// Work-queue / competing-consumer delivery settings (standard at-least-once
 /// lease / retry semantics).
 ///
-/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
+/// @spec tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkQueueConfig {
     /// Lease duration before an unacked entry is redelivery-eligible.
@@ -84,7 +84,7 @@ impl Default for WorkQueueConfig {
 /// is never deleted — the broker owns task durability until ack. (`max_*` below
 /// are reserved for a future hard-cap/backpressure knob; they do not prune.)
 ///
-/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
+/// @spec tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetentionConfig {
     /// Reserved (future hard cap); does not prune un-acked entries.
@@ -104,7 +104,7 @@ impl Default for RetentionConfig {
 
 /// Engine configuration for the in-process relay core.
 ///
-/// @spec apps/relay/tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
+/// @spec tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#config
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RelayCoreConfig {

@@ -25,7 +25,7 @@ e2e_tests:
     claim_id: normalized-win-ratchet-decision-model
     contract_id: relay-work-queue-performance-workload-behavior
     category: behavior
-    command: "bash apps/relay/scripts/ec-evidence.sh performance-behavior"
+    command: "bash scripts/ec-evidence.sh performance-behavior"
     assertions:
       - "The publish, ordered lease, batch acknowledgement, committed-watermark, redelivery, and per-subject isolation workloads complete with every message acknowledged exactly once."
       - "The normalized decision model fails both a pinned-ratio regression and loss of a must-beat cell; this behavior case does not claim that its hard-coded inputs are measured performance."
@@ -36,8 +36,8 @@ e2e_tests:
     claim_id: normalized-win-ratchet-decision-model
     contract_id: relay-measured-durable-lifecycle-envelope
     category: efficiency
-    test_path: apps/relay/tests/efficiency_relay_competitor_performance_measured_durable_lifecycle.rs
-    command: "bash apps/relay/scripts/ec-evidence.sh performance-efficiency"
+    test_path: tests/efficiency_relay_competitor_performance_measured_durable_lifecycle.rs
+    command: "bash scripts/ec-evidence.sh performance-efficiency"
     assertions:
       - "A report-only child process uses temporary disk storage with FsyncPolicy::Always to publish and then lease/ack exactly 2,000 128-byte payloads in 100-message batches."
       - "The child emits one machine-readable report containing non-zero elapsed time, at least 20 samples per phase, throughput, batch p95, acknowledgement counts, and error count; missing, malformed, zero-sample, incomplete, or error reports fail closed."
@@ -50,7 +50,7 @@ e2e_tests:
     claim_id: normalized-win-ratchet-decision-model
     contract_id: relay-performance-workload-stability
     category: stability
-    command: "RELAY_SOAK_AUTOSTART=1 bash apps/relay/scripts/soak.sh"
+    command: "RELAY_SOAK_AUTOSTART=1 bash scripts/soak.sh"
     assertions:
       - "The bounded fixed-state publish, lease, heartbeat, and inspect workload completes for 60 seconds with a non-zero operation count and zero HTTP or lifecycle errors."
       - "The second observation window stays within the pinned RSS, file-descriptor, thread/task, and p99 latency growth ceilings."
@@ -64,10 +64,10 @@ tool_contracts:
     tool: meter
     manifest: meter-relay-performance.toml
     category: efficiency
-    command: "cd apps/relay && ../../target/debug/vat run meter-perf"
+    command: "vat run meter-perf"
     native:
       version: 1
       project: relay
       source_contract: relay-competitor-performance-measured-durable-lifecycle
-      delegate_command: "cd apps/relay && ../../target/debug/vat run meter-perf"
+      delegate_command: "vat run meter-perf"
 ```

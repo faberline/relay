@@ -21,7 +21,7 @@
 # Requires: docker, kind, kubectl, curl, jq.
 set -euo pipefail
 
-REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
 CLUSTER=relay-smoke
 IMG=relay:dev
 PFPIDS=()

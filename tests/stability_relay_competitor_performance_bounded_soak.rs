@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/relay/external-contracts/competitor-performance/efficiency/perf-gate.md#relay-competitor-performance-bounded-soak
+// SPEC-MANAGED: external-contracts/competitor-performance/efficiency/perf-gate.md#relay-competitor-performance-bounded-soak
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec relay-competitor-performance-bounded-soak
@@ -7,7 +7,7 @@
 // @contract relay-performance-workload-stability
 // @category stability
 // @required_for_production true
-// @command RELAY_SOAK_AUTOSTART=1 bash apps/relay/scripts/soak.sh
+// @command RELAY_SOAK_AUTOSTART=1 bash scripts/soak.sh
 // AW-EC-END
 
 // Contract: The bounded fixed-state publish, lease, heartbeat, and inspect workload completes for 60 seconds with a non-zero operation count and zero HTTP or lifecycle errors.
@@ -15,7 +15,7 @@
 #[test]
 #[ignore = "AW EC gate: run via `aw health --verify-ec` or `cargo test -- --ignored`"]
 fn relay_competitor_performance_bounded_soak() {
-    let command = "RELAY_SOAK_AUTOSTART=1 bash apps/relay/scripts/soak.sh";
+    let command = "RELAY_SOAK_AUTOSTART=1 bash scripts/soak.sh";
     let id = "relay-competitor-performance-bounded-soak";
     let mut root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     while !root.join(".aw").is_dir() {

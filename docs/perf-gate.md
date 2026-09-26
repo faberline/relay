@@ -111,8 +111,8 @@ That is why the arena claim is split rather than hiding the losing cell.
 ## Artifacts
 
 - Closed-loop harness: [`examples/bench_compare.rs`](../examples/bench_compare.rs).
-- Gate spec: [`apps/arena/examples/relay-vs-rabbitmq-nats-redis.toml`](../../arena/examples/relay-vs-rabbitmq-nats-redis.toml)
-- Production EC source: [`external-contracts/competitor-performance/efficiency/perf-gate.md`](../external-contracts/competitor-performance/efficiency/perf-gate.md), generated into `apps/relay/aw.toml` and verified by `aw ec verify --project relay`.
+- Gate spec: [`apps/arena/examples/relay-vs-rabbitmq-nats-redis.toml`](https://github.com/faberline/arena/blob/main/examples/relay-vs-rabbitmq-nats-redis.toml)
+- Production EC source: [`external-contracts/competitor-performance/efficiency/perf-gate.md`](../external-contracts/competitor-performance/efficiency/perf-gate.md), generated into `aw.toml` and verified by `aw ec verify --project relay`.
 - relay-side measurement: `cargo bench -p relay` (criterion;
   [`benches/relay_bench.rs`](../benches/relay_bench.rs)) — the competitor-free
   local baseline for publish / lease+ack.
