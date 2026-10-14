@@ -43,8 +43,8 @@ use raft_runtime::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::engine::{Relay, SubjectLive};
-use crate::types::{default_priority, AppendOutcome, CommittedOffset, Lease, Payload};
+use crate::broker::engine::{Relay, SubjectLive};
+use crate::broker::types::{default_priority, AppendOutcome, CommittedOffset, Lease, Payload};
 
 /// How many applied entries between host snapshots (log compaction; arms
 /// InstallSnapshot for a lagging/fresh replica). Snapshots serialize only the

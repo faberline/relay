@@ -46,7 +46,7 @@ nodes:
     label: "README: add 4 umbrella-derived capability sections (std endpoints, cli-std, chainable, ec-gates)"
     kind: process
   ha_doc:
-    label: "HA.md: auto-mode, RelayStateMachine, lease/ack limitation, RELAY_PEERS, operator CR, backup, peer-TLS gap"
+    label: "docs/ha.md: auto-mode, RelayStateMachine, lease/ack limitation, RELAY_PEERS, operator CR, backup, peer-TLS gap"
     kind: process
   dockerfile:
     label: "Dockerfile EXPOSE 8080 -> 7000 (include_str! keeps render byte-equal)"
@@ -79,7 +79,7 @@ flowchart TD
   traits["aw.toml traits -> service umbrella + honest extras"]
   readme_sync["README: single relay bin rows + WI #1204-#1209 work-roots"]
   readme_new["README: 4 umbrella-derived capability sections"]
-  ha_doc["HA.md: auto-mode HA story"]
+  ha_doc["docs/ha.md: auto-mode HA story"]
   dockerfile["Dockerfile EXPOSE 8080 -> 7000"]
   llm_topic["llm operations topic += --grace-secs"]
   verify["aw capability check >= baseline; cargo test green"]
@@ -143,7 +143,7 @@ changes:
     section: logic
     impl_mode: hand-written
     description: "Capability contract sync: drop every relay-server/relay-raft/src-bin evidence reference for the single relay bin + WI #1204-#1209 work-roots; add the four umbrella-derived capability sections (standard-operational-endpoints, cli-standard-surface, chainable-output-conformance with honest partial maturity, ec-gates-configured); update security-hardening for shipped RELAY_AUTH + peer-TLS surface; keep the field-contract + work-root-table format."
-  - path: HA.md
+  - path: docs/ha.md
     action: create
     section: logic
     impl_mode: hand-written
@@ -153,7 +153,7 @@ changes:
     section: unit-test
     impl_mode: hand-written
     description: "EXPOSE 8080 -> 7000 (the standard serve port; RELAY_BIND default 0.0.0.0:7000). Render reads this fixture via include_str!, so dockerfile_render_reproduces_committed_fixtures stays byte-equal."
-  - path: src/llm.rs
+  - path: src/bin/relay/llm.rs
     action: modify
     section: unit-test
     impl_mode: hand-written

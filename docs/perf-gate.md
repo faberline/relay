@@ -12,7 +12,7 @@ beat the primary bar (RabbitMQ) where claimed, or the gate fails the build.
 | bulk work-queue (batch 1,000) | RabbitMQ quorum, NATS JetStream WorkQueuePolicy | full publish + lease/ack lifecycle throughput (higher better) | RabbitMQ quorum |
 
 Primary bar = **RabbitMQ** — the closest direct single-cast work-queue broker.
-NATS JetStream is the Axiom ecosystem replacement target, Redis Streams is the
+NATS JetStream is the faberline ecosystem replacement target, Redis Streams is the
 pragmatic job-queue baseline, and Dragonfly is the multi-core Redis-compatible
 variant. Redpanda/Kafka-class topic replay belongs to tape's gate, not relay's.
 
@@ -111,7 +111,7 @@ That is why the arena claim is split rather than hiding the losing cell.
 ## Artifacts
 
 - Closed-loop harness: [`examples/bench_compare.rs`](../examples/bench_compare.rs).
-- Gate spec: [`apps/arena/examples/relay-vs-rabbitmq-nats-redis.toml`](https://github.com/faberline/arena/blob/main/examples/relay-vs-rabbitmq-nats-redis.toml)
+- Gate spec: [`faberline/arena` `examples/relay-vs-rabbitmq-nats-redis.toml`](https://github.com/faberline/arena/blob/main/examples/relay-vs-rabbitmq-nats-redis.toml)
 - Production EC source: [`external-contracts/competitor-performance/efficiency/perf-gate.md`](../external-contracts/competitor-performance/efficiency/perf-gate.md), generated into `aw.toml` and verified by `aw ec verify --project relay`.
 - relay-side measurement: `cargo bench -p relay` (criterion;
   [`benches/relay_bench.rs`](../benches/relay_bench.rs)) — the competitor-free

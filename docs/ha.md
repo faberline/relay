@@ -1,7 +1,7 @@
 <!-- HANDWRITE-BEGIN gap="missing-generator:logic:80f2de20" tracker="pending-tracker" reason="Relay HA contract: auto-mode, fully committed work-queue lifecycle, snapshots/applied floor, operator topology, backup/recovery, and shared authenticated peer transport." -->
 # relay — high availability (#1207)
 
-relay's HA is **auto-mode raft** on the shared `libs/raft-runtime` driver (WI
+relay's HA is **auto-mode raft** on the shared `core/raft-runtime` driver (WI
 #1207 replaced the hand-rolled driver/store/topology stack). One substrate
 serves every deployment shape: the same single `relay` bin is the single-node
 dev process, the raft replica pod, and the backup source.
@@ -27,7 +27,7 @@ Service for peer DNS), and spawns one `RaftHost` for the whole node.
 
 ## RelayStateMachine — what replicates, and the restart floor
 
-`src/raft.rs` wires the engine as a `raft_runtime::RaftStateMachine`:
+`src/cluster/raft.rs` wires the engine as a `raft_runtime::RaftStateMachine`:
 
 - **Command = `RelayCommand`** — publish, lease/batch lease, ack/batch ack,
   release, heartbeat, and reconcile all route through `host.propose`. The

@@ -352,37 +352,37 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: src/types.rs
+  - path: src/broker/types.rs
     action: modify
     section: schema
     impl_mode: hand-written
     reason: "Add the epoch fencing token to Lease."
-  - path: src/workqueue.rs
+  - path: src/broker/workqueue.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Prefer redeliver-eligible seqs on lease; carry epoch; epoch-checked ack (idempotent / fenced); heartbeat to extend a lease. Dead-letter cap: pick_classified/is_dead flag a seq whose delivered count >= max_attempts (0 disables); lease_or_dead returns Leased | Dead{seq,attempts} | Empty; discard(seq) advances the committed watermark for a dead-lettered entry."
-  - path: src/engine.rs
+  - path: src/broker/engine.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Expose heartbeat and epoch-checked ack through the Relay facade. lease/lease_batch route through lease_one, which dead-letters exhausted entries: durably publish to {subject}{dlq_suffix} WITHOUT the source lock (H2: DLQ-before-discard) with x-relay-dlq-* headers, then discard + persist + (ack-mode) truncate. DLQ subjects open with max_attempts=0 (no recursion)."
-  - path: src/config.rs
+  - path: src/broker/config.rs
     action: modify
     section: config
     impl_mode: hand-written
     reason: "WorkQueueConfig.dlq_suffix (default .dlq) names the dead-letter sibling subject; max_attempts now enforced (0 disables)."
-  - path: src/wire.rs
+  - path: src/transport/wire.rs
     action: modify
     section: schema
     impl_mode: hand-written
     reason: "AckRequest gains an optional epoch; add HeartbeatRequest / HeartbeatResponse DTOs."
-  - path: src/server.rs
+  - path: src/transport/server.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Honor the ack epoch and add the POST heartbeat endpoint (JSON + CBOR)."
-  - path: src/openapi.rs
+  - path: src/transport/openapi.rs
     action: modify
     section: rest-api
     impl_mode: hand-written

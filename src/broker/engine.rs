@@ -23,13 +23,13 @@ use std::sync::{Arc, Mutex, RwLock};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::config::RelayCoreConfig;
-use crate::log::Log;
-use crate::shard::shard_for;
-use crate::types::{
+use crate::broker::config::RelayCoreConfig;
+use crate::broker::log::Log;
+use crate::broker::shard::shard_for;
+use crate::broker::types::{
     AppendOutcome, CommittedOffset, Lease, LogEntry, Payload, Seq, ShardId, DEFAULT_PRIORITY,
 };
-use crate::workqueue::{LeaseOrDead, WorkQueue};
+use crate::broker::workqueue::{LeaseOrDead, WorkQueue};
 use tokio::sync::watch;
 
 struct SubjectState {

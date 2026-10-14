@@ -1,7 +1,7 @@
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:615ff6fb" tracker="pending-tracker" reason="Integration tests over a real ephemeral server with a temp registry JSON file: publish 200/401/403 (write grant), consume-side lease/ack/len 200/403 with role hierarchy + wildcard grants, streaming consume 401/403, shared error bodies, tokenless probes under required auth, off-mode tokenless regression, and AuthConfig::resolve fail-fast (missing/unparseable/empty registry, unknown mode)."
 //! Bearer-token auth integration tests over a real ephemeral server (#1206).
 //!
-//! relay adopts the shared `libs/service-auth` role-map contract: the blanket
+//! relay adopts the shared `core/service-auth` role-map contract: the blanket
 //! auth middleware on the `/v1` data plane (401 for missing/unknown tokens
 //! under `RELAY_AUTH=required`), per-handler-group authorization on the
 //! `{subject}` path param (publish family = write, consume family = read;
@@ -15,9 +15,9 @@ use axum::http::{header, HeaderMap};
 use serde_json::json;
 use service_auth::{Role, Verifier};
 
-use relay::auth::AuthConfig;
-use relay::server::{router, AppState};
-use relay::server_config::RelayServerConfig;
+use relay::transport::auth::AuthConfig;
+use relay::transport::server::{router, AppState};
+use relay::transport::server_config::RelayServerConfig;
 
 /// jobs-scoped writer + reader, plus a wildcard admin.
 const REGISTRY: &str = r#"{

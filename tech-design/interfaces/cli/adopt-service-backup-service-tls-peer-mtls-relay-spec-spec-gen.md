@@ -16,7 +16,7 @@ summary: >
   and ships them to a libs/service-backup destination sink with optional age
   retention; restore is a load_live merge on a fresh node (idempotent per
   message_id — surplus entries redeliver, at-least-once). Peer-mTLS material
-  loads through a thin src/peer_tls.rs adapter over libs/peer-tls
+  loads through a thin src/tls/peer.rs adapter over libs/peer-tls
   (PeerTlsConfig::from_env("RELAY_PEER"): RELAY_PEER_TLS_CERT/KEY/CA +
   RELAY_PEER_MTLS=on|off), validated fail-fast at serve startup in replica
   mode; mTLS termination on the raft peer port is a filed raft-runtime/h2c seam
@@ -37,19 +37,19 @@ entry: main
 nodes:
   main:
     kind: start
-    label: "Single relay bin gains the deploy-CLI tail: Command::Spec + Command::Backup arms beside serve/llm/upgrade/issue/k8s/dockerfile. main still installs the rustls crypto provider FIRST — now unconditionally via peer_tls::install_default_crypto_provider (peer-tls links rustls in every build, so the private rustls-provider feature indirection collapses; src/tls.rs delegates)"
+    label: "Single relay bin gains the deploy-CLI tail: Command::Spec + Command::Backup arms beside serve/llm/upgrade/issue/k8s/dockerfile. main still installs the rustls crypto provider FIRST — now unconditionally via peer_tls::install_default_crypto_provider (peer-tls links rustls in every build, so the private rustls-provider feature indirection collapses; src/tls/mod.rs delegates)"
   verb:
     kind: decision
     label: "Which verb? spec | spec gen | backup. spec/spec gen are OFFLINE (no server, no network, stdout/--out only); backup needs a RUNNING node (HTTP fetch) and the `backup` build feature"
   spec:
     kind: process
-    label: "relay spec [--format openapi|openapi-yaml|json-schema]: the offline twin of GET /openapi.json. openapi = crate::openapi::api_doc_json() (pretty JSON, same utoipa document the served route renders); openapi-yaml = serde_yaml::to_string(&openapi()) (new openapi::openapi_yaml accessor, keep's pattern); json-schema = just the component schemas as {components: ...} (new openapi::json_schema_json — relay's utoipa doc registers no named schemas today, so components serializes empty; emitted honestly, never faked). keep's --shapes/--fields flags are OMITTED: relay has no request-shape cookbook or value-type catalog equivalent — deliberate contract difference, not a gap"
+    label: "relay spec [--format openapi|openapi-yaml|json-schema]: the offline twin of GET /openapi.json. openapi = crate::transport::openapi::api_doc_json() (pretty JSON, same utoipa document the served route renders); openapi-yaml = serde_yaml::to_string(&openapi()) (new openapi::openapi_yaml accessor, keep's pattern); json-schema = just the component schemas as {components: ...} (new openapi::json_schema_json — relay's utoipa doc registers no named schemas today, so components serializes empty; emitted honestly, never faked). keep's --shapes/--fields flags are OMITTED: relay has no request-shape cookbook or value-type catalog equivalent — deliberate contract difference, not a gap"
   gen:
     kind: process
     label: "relay spec gen --lang ts|py|rust [--target PROFILE] --out <dir> [--http fetch|axios]: TargetPolicy::resolve from clients/codegen.toml then openapi_codegen::generate_for_target(&openapi::api_doc_json(), opts, target). GeneratedOutput::write_to_dir writes every generated file plus .openapi-codegen.json; stdout names files, target, and the entrypoint next command. One shared codegen path, no external tool"
   backup:
     kind: process
-    label: "relay backup --url <base> --dest <uri> [--token (env RELAY_BACKUP_TOKEN)] [--retention-secs N] (feature `backup` = dep:reqwest + service-backup/s3, lumen #808 layout; without the feature the arm bails with the rebuild hint): src/backup.rs fetch_snapshot_bytes GETs {url}/admin/backup (Bearer token when set; non-2xx bails with status + body), then run_backup hands the EXACT response bytes to service_backup::run_backup_once against sink_from_destination(BackupDestination::from_uri(dest)) + RetentionPolicy — file:// always works, s3:// via the lib's s3 feature, gs:// parses but the lib's sink fails loudly. Prints the BackupRunResult as pretty JSON"
+    label: "relay backup --url <base> --dest <uri> [--token (env RELAY_BACKUP_TOKEN)] [--retention-secs N] (feature `backup` = dep:reqwest + service-backup/s3, lumen #808 layout; without the feature the arm bails with the rebuild hint): src/cluster/backup.rs fetch_snapshot_bytes GETs {url}/admin/backup (Bearer token when set; non-2xx bails with status + body), then run_backup hands the EXACT response bytes to service_backup::run_backup_once against sink_from_destination(BackupDestination::from_uri(dest)) + RetentionPolicy — file:// always works, s3:// via the lib's s3 feature, gs:// parses but the lib's sink fails loudly. Prints the BackupRunResult as pretty JSON"
   endpoint:
     kind: process
     label: "Server side: GET /admin/backup joins the data-plane router INSIDE the shared service-auth middleware (probes stay tokenless; this route does not). Handler authorizes Role::Admin on resource '*' (lumen's guard: a cluster-wide admin op) then returns application/json bytes from raft::snapshot_bytes(&relay, applied) where applied = raft-attached ? RelayRaft::applied_index() : 0 (single-node has no raft floor). Registered in the utoipa ApiDoc so /openapi.json and relay spec both list it"
@@ -61,7 +61,7 @@ nodes:
     label: "Restore semantics (documented, exercised library-side; no HTTP restore endpoint this slice): feed the artifact's bytes to load_snapshot_bytes on a fresh node — load_live re-publishes every entry through the normal engine path, idempotent per message_id, preserving not_before/priority/appended_at. It is a MERGE, not a wipe: entries the target already holds dedupe; entries it holds that the snapshot lacks stay and redeliver — at-least-once, exactly the raft InstallSnapshot semantics. Leases/acks are NOT in the snapshot (node-local by design, #544): restored work is un-leased and redelivers"
   tls:
     kind: process
-    label: "src/peer_tls.rs (new, always compiled): thin adapter over libs/peer-tls — pub PeerTlsConfig { cert, key, ca, required } + From conversions, from_env() = peer_tls::PeerTlsConfig::from_env(RELAY_PEER) deriving RELAY_PEER_TLS_CERT / RELAY_PEER_TLS_KEY / RELAY_PEER_TLS_CA / RELAY_PEER_MTLS=on|off (lumen's env contract byte-for-byte with the RELAY prefix), plus rustls_server_config()/rustls_client_config() passthroughs. Ok(None) when nothing is set; partial config or a mis-pointed path is an Err naming the variable/path (fail fast, never a silent fallback)"
+    label: "src/tls/peer.rs (new, always compiled): thin adapter over libs/peer-tls — pub PeerTlsConfig { cert, key, ca, required } + From conversions, from_env() = peer_tls::PeerTlsConfig::from_env(RELAY_PEER) deriving RELAY_PEER_TLS_CERT / RELAY_PEER_TLS_KEY / RELAY_PEER_TLS_CA / RELAY_PEER_MTLS=on|off (lumen's env contract byte-for-byte with the RELAY prefix), plus rustls_server_config()/rustls_client_config() passthroughs. Ok(None) when nothing is set; partial config or a mis-pointed path is an Err naming the variable/path (fail fast, never a silent fallback)"
   tlswire:
     kind: decision
     label: "serve_main, replica/HA mode only: peer_tls::PeerTlsConfig::from_env()? BEFORE the raft group spawns — a misconfigured deployment exits nonzero at startup. None => plain h2c peer transport (today's behavior, logged at info). Some => material validated + rustls builders proven constructible; log identity. required=true => WARN: mTLS termination on the raft peer port is NOT YET APPLIED"
@@ -97,7 +97,7 @@ flowchart TD
     backup -->|GET /admin/backup| endpoint[admin-guarded route inside the auth middleware: Role::Admin on *]
     endpoint -->|bytes from| fmt[ONE format: pub EngineSnapshot + raft snapshot_bytes / load_snapshot_bytes shared by state machine, endpoint, artifact]
     fmt -->|round-trip| restore[restore = load_live MERGE on a fresh node: idempotent per message_id, leases not replicated, at-least-once]
-    main -->|serve path| tls[src/peer_tls.rs: peer_tls PeerTlsConfig from_env RELAY_PEER — cert/key/ca + RELAY_PEER_MTLS=on]
+    main -->|serve path| tls[src/tls/peer.rs: peer_tls PeerTlsConfig from_env RELAY_PEER — cert/key/ca + RELAY_PEER_MTLS=on]
     tls --> tlswire{replica mode: material set?}
     tlswire -->|None| plain[plain h2c peers — today's behavior]
     tlswire -->|Some| valid[validate + prove rustls builders; fail fast on partial/mis-pointed config]
@@ -142,7 +142,7 @@ requirements:
     text: "The new Spec/Backup clap arms parse (spec, spec --format openapi-yaml|json-schema, spec gen --lang --out, backup --url --dest --retention-secs) alongside the existing verbs; a backup-less build answers relay backup with the rebuild hint."
     kind: regression
     risk: low
-    verify: src/bin/relay.rs::tests::spec_and_backup_verbs_parse
+    verify: src/bin/relay/main.rs::tests::spec_and_backup_verbs_parse
   crd_backup_cron_render:
     id: R4
     text: "RelaySpec.backup (flat URI string destination) renders a <name>-backup CronJob via the shared service_k8s::render::cron_job — schedule, relay backup args (--url cluster-DNS, --dest, --retention-secs), RELAY_BACKUP_TOKEN secretKeyRef when adminTokenSecret set; absent backup renders NO CronJob and the CRD stays structural-schema safe."
@@ -160,13 +160,13 @@ requirements:
     text: "peer_tls::PeerTlsConfig::from_env derives RELAY_PEER_TLS_CERT/KEY/CA + RELAY_PEER_MTLS=on: None when nothing set, Some with required=true when all set + on, an error naming the vars on partial config, and a clear path-naming error on a mis-pointed cert path (fail fast)."
     kind: functional
     risk: medium
-    verify: src/peer_tls.rs::tests::{from_env_returns_none_when_nothing_set,from_env_loads_when_all_set,from_env_errors_on_partial_config,mis_pointed_cert_path_fails_fast_naming_the_path}
+    verify: src/tls/peer.rs::tests::{from_env_returns_none_when_nothing_set,from_env_loads_when_all_set,from_env_errors_on_partial_config,mis_pointed_cert_path_fails_fast_naming_the_path}
   peer_tls_rustls_builders:
     id: R3
     text: "Scratch PEM material (the peer-tls fixture cert/key) builds both rustls server and client configs through the adapter passthroughs — the material is proven usable even though the raft-runtime/h2c seam cannot terminate mTLS yet (filed gap)."
     kind: functional
     risk: low
-    verify: src/peer_tls.rs::tests::builds_rustls_peer_configs_from_pem_material
+    verify: src/tls/peer.rs::tests::builds_rustls_peer_configs_from_pem_material
   spec_gen_clients:
     id: R1
     text: "relay spec gen --lang ts|py|rust [--target PROFILE] --out <dir> writes a non-empty typed client plus a target manifest per language via shared openapi-codegen; the ts client carries types.ts, client.ts, and index.ts."
@@ -181,15 +181,15 @@ requirements:
     verify: tests/spec_cli.rs::spec_prints_parseable_openapi_in_every_format
 ---
 flowchart TD
-    r1[R1 cli surface parses] --> src_bin_relay_rs_tests_spec_and_backup_verbs_parse[src/bin/relay.rs::tests::spec_and_backup_verbs_parse]
+    r1[R1 cli surface parses] --> src_bin_relay_rs_tests_spec_and_backup_verbs_parse[src/bin/relay/main.rs::tests::spec_and_backup_verbs_parse]
     r1[R1 spec gen clients] --> tests_spec_cli_rs_spec_gen_writes_a_client_for_every_language[tests/spec_cli.rs::spec_gen_writes_a_client_for_every_language]
     r1[R1 spec offline formats] --> tests_spec_cli_rs_spec_prints_parseable_openapi_in_every_format[tests/spec_cli.rs::spec_prints_parseable_openapi_in_every_format]
     r2[R2 admin backup endpoint] --> tests_backup_rs_admin_backup_returns_the_state_machine_snapshot_bytes[tests/backup.rs::admin_backup_returns_the_state_machine_snapshot_bytes]
     r2[R2 backup cli verb] --> tests_backup_rs_run_backup_ships_snapshot_to_local_sink_cfg_feature_backup[tests/backup.rs::run_backup_ships_snapshot_to_local_sink (cfg feature backup)]
     r2[R2 backup endpoint admin guarded] --> tests_backup_rs_admin_backup_requires_admin_when_auth_required[tests/backup.rs::admin_backup_requires_admin_when_auth_required]
     r2[R2 backup round trip restore] --> tests_backup_rs_backup_artifact_round_trips_through_load_live_on_a_fresh_engine[tests/backup.rs::backup_artifact_round_trips_through_load_live_on_a_fresh_engine]
-    r3[R3 peer tls env contract] --> src_peer_tls_rs_tests_from_env_returns_none_when_nothing_set_from_env_loads_when_all_set_from_env_errors_on_partial_config_mis_pointed_cert_path_fails_fast_naming_the_path[src/peer_tls.rs::tests::{from_env_returns_none_when_nothing_set,from_env_loads_when_all_set,from_env_errors_on_partial_config,mis_pointed_cert_path_fails_fast_naming_the_path}]
-    r3[R3 peer tls rustls builders] --> src_peer_tls_rs_tests_builds_rustls_peer_configs_from_pem_material[src/peer_tls.rs::tests::builds_rustls_peer_configs_from_pem_material]
+    r3[R3 peer tls env contract] --> src_peer_tls_rs_tests_from_env_returns_none_when_nothing_set_from_env_loads_when_all_set_from_env_errors_on_partial_config_mis_pointed_cert_path_fails_fast_naming_the_path[src/tls/peer.rs::tests::{from_env_returns_none_when_nothing_set,from_env_loads_when_all_set,from_env_errors_on_partial_config,mis_pointed_cert_path_fails_fast_naming_the_path}]
+    r3[R3 peer tls rustls builders] --> src_peer_tls_rs_tests_builds_rustls_peer_configs_from_pem_material[src/tls/peer.rs::tests::builds_rustls_peer_configs_from_pem_material]
     r4[R4 crd backup cron render] --> tests_operator_rs_backup_cron_job_renders_only_when_policy_set_cfg_feature_operator[tests/operator.rs::backup_cron_job_renders_only_when_policy_set (cfg feature operator)]
     r5[R5 llm operations topic] --> tests_spec_cli_rs_llm_operations_topic_documents_the_new_surfaces[tests/spec_cli.rs::llm_operations_topic_documents_the_new_surfaces]
 ```
@@ -202,42 +202,42 @@ changes:
     action: modify
     section: logic
     impl_mode: hand-written
-    description: "Feature `backup` = [dep:reqwest, service-backup/s3] (lumen #808 layout). New unconditional deps: service-backup (shared destination/policy/sink/runner contract), peer-tls (peer-mTLS material loading — links rustls in every build), openapi-codegen (spec gen), serde_yaml (spec --format openapi-yaml; was operator-only), rustls (peer_tls builder passthrough types). reqwest becomes an optional runtime dep (still a dev-dep). The private rustls-provider feature collapses: rustls is always linked now, so self-update/issue/operator drop the indirection and src/tls.rs installs unconditionally."
-  - path: src/bin/relay.rs
+    description: "Feature `backup` = [dep:reqwest, service-backup/s3] (lumen #808 layout). New unconditional deps: service-backup (shared destination/policy/sink/runner contract), peer-tls (peer-mTLS material loading — links rustls in every build), openapi-codegen (spec gen), serde_yaml (spec --format openapi-yaml; was operator-only), rustls (peer_tls builder passthrough types). reqwest becomes an optional runtime dep (still a dev-dep). The private rustls-provider feature collapses: rustls is always linked now, so self-update/issue/operator drop the indirection and src/tls/mod.rs installs unconditionally."
+  - path: src/bin/relay/main.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Command::Spec(SpecArgs{gen subcommand, --format openapi|openapi-yaml|json-schema}) mirroring keep minus --shapes/--fields, Command::Backup(BackupArgs{--url, --dest, --token env RELAY_BACKUP_TOKEN, --retention-secs}) mirroring lumen; spec_gen resolves clients/codegen.toml through TargetPolicy, calls openapi_codegen::generate_for_target, and writes files plus a manifest; dispatch_backup stays feature-gated (the not-gated arm bails with the rebuild hint). serve_main validates peer_tls::PeerTlsConfig::from_env in replica mode before the raft group spawns. Parse-surface tests extended."
-  - path: src/backup.rs
+  - path: src/cluster/backup.rs
     action: create
     section: logic
     impl_mode: hand-written
     description: "New module, cfg(feature = backup): fetch_snapshot_bytes(base_url, token) GETs {base_url}/admin/backup via reqwest (Bearer when set, non-2xx bails with status + body); run_backup(base_url, token, dest, retention) hands the exact bytes to service_backup::run_backup_once against sink_from_destination — lumen src/backup.rs pattern minus the restore POST (relay restore is load_live merge, library-side)."
-  - path: src/peer_tls.rs
+  - path: src/tls/peer.rs
     action: create
     section: logic
     impl_mode: hand-written
     description: "New always-compiled thin adapter over libs/peer-tls (lumen src/tls.rs #971 pattern): ENV_PREFIX RELAY_PEER, pub PeerTlsConfig {cert,key,ca,required} + From conversions, from_env() deriving RELAY_PEER_TLS_CERT/KEY/CA + RELAY_PEER_MTLS=on|off, rustls_server_config/rustls_client_config passthroughs. Unit tests: none-set => None, all-set + on => required, partial => must-all-be-set error, mis-pointed cert path => error naming the path, PEM fixture builds both rustls configs."
-  - path: src/tls.rs
+  - path: src/tls/mod.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "install_default_crypto_provider() now delegates unconditionally to peer_tls::install_default_crypto_provider (peer-tls links rustls in every build; the rustls-provider cfg gate and doc caveats go away)."
-  - path: src/raft.rs
+  - path: src/cluster/raft.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "EngineSnapshot becomes pub with pub fields; new pub fn snapshot_bytes(relay, up_to) and pub fn load_snapshot_bytes(relay, bytes) -> Index factor the ONE snapshot serialization out of RaftStateMachine::{snapshot,restore}, which now delegate — the /admin/backup endpoint and the backup artifact carry the identical bytes."
-  - path: src/server.rs
+  - path: src/transport/server.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "GET /admin/backup joins the data-plane router inside the service-auth middleware: authorize Role::Admin on '*' (lumen's guard), then application/json bytes from raft::snapshot_bytes(&relay, raft.map(applied_index).unwrap_or(0)); utoipa::path registered."
-  - path: src/openapi.rs
+  - path: src/transport/openapi.rs
     action: modify
     section: logic
     impl_mode: hand-written
-    description: "New offline accessors: openapi_yaml() (serde_yaml over the same document, keep's pattern) and json_schema_json() ({components: ...} view); crate::server::admin_backup added to the ApiDoc paths."
+    description: "New offline accessors: openapi_yaml() (serde_yaml over the same document, keep's pattern) and json_schema_json() ({components: ...} view); crate::transport::server::admin_backup added to the ApiDoc paths."
   - path: src/lib.rs
     action: modify
     section: logic
@@ -253,7 +253,7 @@ changes:
     section: logic
     impl_mode: hand-written
     description: "backup_cron_job(relay, cx) -> Option<Value> via the shared service_k8s::render::cron_job helper: {name}-backup, schedule, same relay image, command [relay], args [backup --url http://{name}.{ns}.svc.cluster.local:7000 --dest <destination> (--retention-secs N)], RELAY_BACKUP_TOKEN secretKeyRef when adminTokenSecret set, serviceAccountName {name}; appended to render() only when spec.backup is Some."
-  - path: src/llm.rs
+  - path: src/bin/relay/llm.rs
     action: modify
     section: logic
     impl_mode: hand-written
@@ -267,7 +267,7 @@ changes:
     action: create
     section: unit-test
     impl_mode: hand-written
-    description: "Live-node integration over the http2_transport.rs harness (service_http::serve on 127.0.0.1:0): /admin/backup returns parseable EngineSnapshot bytes carrying a published un-acked message; the artifact round-trips through load_snapshot_bytes on a FRESH engine and the message leases back with the original payload (idempotent merge re-load asserted); with auth required the endpoint 401s tokenless, 403s a non-admin token, 200s an admin-on-* token; cfg(feature = backup): relay::backup::run_backup ships the snapshot to a file:// sink (BackupRunResult + artifact on disk) and prunes by retention."
+    description: "Live-node integration over the http2_transport.rs harness (service_http::serve on 127.0.0.1:0): /admin/backup returns parseable EngineSnapshot bytes carrying a published un-acked message; the artifact round-trips through load_snapshot_bytes on a FRESH engine and the message leases back with the original payload (idempotent merge re-load asserted); with auth required the endpoint 401s tokenless, 403s a non-admin token, 200s an admin-on-* token; cfg(feature = backup): relay::cluster::backup::run_backup ships the snapshot to a file:// sink (BackupRunResult + artifact on disk) and prunes by retention."
   - path: tests/operator.rs
     action: modify
     section: unit-test

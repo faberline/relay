@@ -13,7 +13,7 @@
 //! workflows"): a message body is an opaque [`Payload`] (JSON) plus a
 //! caller-supplied [`MessageId`] for sequencing and dedupe. A producer
 //! serializes whatever message type it uses into the payload. relay owns the
-//! log, sequencing, dedupe, and leases, and depends on no other axiom project.
+//! log, sequencing, dedupe, and leases, and depends on no other faberline project.
 //!
 //! ```
 //! use std::collections::BTreeMap;
@@ -32,44 +32,36 @@
 //! assert_eq!(lease.seq, 0);
 //! assert!(relay.ack("tasks", &lease.lease_id, Some(lease.epoch)).unwrap());
 //! ```
+//!
+//! Modules are grouped by layer: [`broker`] is the in-process work-queue core
+//! (log, engine, work queue), [`cluster`] is raft HA and lease reconciliation,
+//! [`transport`] is the HTTP/h2c + OpenAPI surface, and [`tls`] holds the
+//! rustls provider and peer-mTLS adapter.
 
-pub mod auth;
-#[cfg(feature = "backup")]
-pub mod backup;
-pub mod config;
-pub mod consume;
-pub mod engine;
-pub mod log;
-pub mod metrics;
-pub mod openapi;
+pub mod broker;
+pub mod cluster;
 #[cfg(feature = "operator")]
 pub mod operator;
-pub mod peer_tls;
 pub mod perf_gate;
-pub mod raft;
-pub mod reconciler;
-pub mod server;
-pub mod server_config;
-pub mod shard;
 pub mod tls;
-pub mod types;
-pub mod wire;
-pub mod workqueue;
+pub mod transport;
 
-pub use config::{DedupeConfig, FsyncPolicy, RelayCoreConfig, RetentionConfig, WorkQueueConfig};
-pub use engine::{Relay, SubjectLive};
-pub use log::Log;
-pub use raft::{
-    load_snapshot_bytes, snapshot_bytes, EngineSnapshot, PubCommand, RelayCommand, RelayOutcome,
-    RelayRaft, RelayStateMachine,
+pub use broker::config::{
+    DedupeConfig, FsyncPolicy, RelayCoreConfig, RetentionConfig, WorkQueueConfig,
 };
-pub use reconciler::{spawn_reconciler, spawn_replicated_reconciler, ReconcilerHandle};
-pub use server::{router, AppState};
-pub use server_config::RelayServerConfig;
-pub use shard::shard_for;
-pub use types::{
+pub use broker::engine::{Relay, SubjectLive};
+pub use broker::log::Log;
+pub use broker::shard::shard_for;
+pub use broker::types::{
     AppendOutcome, CommittedOffset, Lease, LogEntry, MessageId, Payload, Seq, ShardId, Subject,
     DEFAULT_PRIORITY,
 };
-pub use workqueue::WorkQueue;
+pub use broker::workqueue::WorkQueue;
+pub use cluster::raft::{
+    load_snapshot_bytes, snapshot_bytes, EngineSnapshot, PubCommand, RelayCommand, RelayOutcome,
+    RelayRaft, RelayStateMachine,
+};
+pub use cluster::reconciler::{spawn_reconciler, spawn_replicated_reconciler, ReconcilerHandle};
+pub use transport::server::{router, AppState};
+pub use transport::server_config::RelayServerConfig;
 // HANDWRITE-END

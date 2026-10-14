@@ -10,7 +10,7 @@
 // @command vat run guard-security
 // AW-EC-END
 
-// Contract: guard scan over apps/relay reports no untriaged Docker, Kubernetes, or static security findings.
+// Contract: guard scan over relay reports no untriaged Docker, Kubernetes, or static security findings.
 // Contract: guard runs the fail-closed evidence driver before attaching Meter evidence from auth, admission, peer-mTLS, direct-Kubernetes, and service-auth reload suites; missing required names, zero execution, a failed control, or an outer-oracle self-test regression makes the runner fail.
 // Contract: The security evidence runs inside vat so generated reports and transient files do not mutate the host checkout.
 #[test]

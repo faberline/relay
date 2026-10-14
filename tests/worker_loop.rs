@@ -10,9 +10,9 @@ use std::net::SocketAddr;
 
 use serde_json::json;
 
-use relay::server::{router, AppState};
-use relay::server_config::RelayServerConfig;
-use relay::wire::{AckResponse, HeartbeatResponse, LeaseResponse};
+use relay::transport::server::{router, AppState};
+use relay::transport::server_config::RelayServerConfig;
+use relay::transport::wire::{AckResponse, HeartbeatResponse, LeaseResponse};
 
 async fn start_server() -> SocketAddr {
     let app = router(AppState::new(

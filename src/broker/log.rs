@@ -20,8 +20,8 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 
-use crate::config::{FsyncPolicy, RelayCoreConfig};
-use crate::types::{
+use crate::broker::config::{FsyncPolicy, RelayCoreConfig};
+use crate::broker::types::{
     AppendOutcome, LogEntry, MessageId, Payload, Seq, ShardId, Subject, DEFAULT_PRIORITY,
 };
 

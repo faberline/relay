@@ -234,7 +234,7 @@ async fn bench_engine(args: &Args, plan: &Plan) -> Result<()> {
 }
 
 async fn bench_relay_h2c(args: &Args, plan: &Plan) -> Result<()> {
-    use relay::wire::{
+    use relay::transport::wire::{
         self, AckBatchRequest, AckBatchResponse, AckOne, LeaseBatchRequest, LeaseBatchResponse,
         PublishBatchItem, PublishBatchRequest,
     };

@@ -53,7 +53,7 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "relay"
-path = "src/bin/relay.rs"
+path = "src/bin/relay/main.rs"
 
 [[bench]]
 name = "relay_bench"
@@ -62,7 +62,7 @@ harness = false
 [dependencies]
 # The broker core is payload-agnostic (epic #120: "knows nothing about
 # workflows"): a message body is carried as opaque JSON. relay stays standalone
-# — it depends on no other axiom project, only third-party crates.
+# — it depends on no other faberline project, only third-party crates.
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
@@ -103,7 +103,7 @@ anyhow = { workspace = true }
 clap = { workspace = true, features = ["env"] }
 cli-std = { git = "https://github.com/faberline/core", tag = "v0.4.14", default-features = false }
 
-# K8s operator (feature `operator`) — the shared libs/service-k8s scaffold + render
+# K8s operator (feature `operator`) — the shared core/service-k8s scaffold + render
 # toolkit (#1208). relay supplies a RelaySpec CRD + ManagedService and gets the
 # reconcile controller for free. Versions mirror the workspace's existing
 # kube-rs users (keep / lumen / mambalibs) so the lockfile stays
@@ -125,12 +125,12 @@ serde_yaml = { workspace = true }
 service-backup = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
 # Shared peer-mTLS material loading (#1209, lumen #971): PeerTlsConfig env
 # contract + PEM loaders + rustls builders + the Once-guarded crypto-provider
-# install. Unconditional (links rustls in every build) — src/peer_tls.rs is the
+# install. Unconditional (links rustls in every build) — src/tls/peer.rs is the
 # thin RELAY_PEER-prefix adapter and serve validates material in replica mode.
 peer-tls = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
 # rustls config types surfaced by the peer_tls builder passthroughs. Always in
 # the graph via peer-tls, so no longer optional (the private rustls-provider
-# feature indirection collapsed; src/tls.rs installs unconditionally).
+# feature indirection collapsed; src/tls/mod.rs installs unconditionally).
 rustls = "0.23"
 # Shared polyglot OpenAPI client codegen (#1209, keep #777): `relay spec gen`
 # generates ts/py/rust clients from relay's own utoipa document — offline.
@@ -151,13 +151,13 @@ default = []
 # create dry-run + pre-filled-URL fallback); release builds enable them.
 self-update = ["cli-std/online"]
 issue = ["cli-std/online"]
-# operator — the shared libs/service-k8s scaffold: a RelaySpec CRD + ManagedService
+# operator — the shared core/service-k8s scaffold: a RelaySpec CRD + ManagedService
 # render, driven by service_k8s::run. Ships the `relay k8s operator run` controller
 # and the CRD generator; pulls kube-rs, so the serving image stays kube-free
 # unless built with this feature (#1208).
 operator = ["dep:kube", "dep:k8s-openapi", "dep:schemars", "dep:service-k8s"]
 # backup — `relay backup` (#1209): fetches a snapshot from a running node's
-# `GET /admin/backup` over HTTP and ships it to a libs/service-backup
+# `GET /admin/backup` over HTTP and ships it to a core/service-backup
 # destination sink (lumen #808 layout). Enables the lib's s3 sink; file://
 # always works. The endpoint itself is always served — this gates only the
 # CLI verb's HTTP fetch path.
@@ -167,7 +167,7 @@ backup = ["dep:reqwest", "service-backup/http-client", "service-backup/s3"]
 # an endpoint is configured in a binary that was not built with OTLP support.
 otel = ["service-http/otlp"]
 # NOTE: the former private `rustls-provider` feature is gone — peer-tls
-# links rustls unconditionally now (#1209), so src/tls.rs installs the
+# links rustls unconditionally now (#1209), so src/tls/mod.rs installs the
 # process-level crypto provider in every build.
 
 [dev-dependencies]

@@ -1,8 +1,8 @@
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:relay-service-admission" tracker="#1206" reason="Verify Relay-selected publish policy uses shared enforcement and default routing stays disabled."
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use relay::server::{router, router_with_admission, AppState};
-use relay::server_config::RelayServerConfig;
+use relay::transport::server::{router, router_with_admission, AppState};
+use relay::transport::server_config::RelayServerConfig;
 use service_http::{AdmissionConfig, AdmissionController};
 use tower::ServiceExt;
 

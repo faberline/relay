@@ -97,7 +97,7 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: src/log.rs
+  - path: src/broker/log.rs
     action: modify
     section: logic
     impl_mode: hand-written

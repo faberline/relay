@@ -6,7 +6,7 @@
 # and the final manifest.
 #
 # usage: scripts/release/candidate.sh <app> <version> <commit> [--out <dir>]
-#   app      one of: tape sift keep relay defer
+#   app      relay
 #   version  X.Y.Z, equal to Cargo.toml at <commit>
 #   commit   40-hex sha; must be the head of origin/main (the workflow's
 #            identity job requires the dispatched commit to equal GITHUB_SHA)
@@ -45,7 +45,7 @@ dirty=$("${GIT[@]}" status --porcelain)
 "${GIT[@]}" fetch --quiet origin main
 origin_main=$("${GIT[@]}" rev-parse origin/main)
 [ "$origin_main" = "$commit" ] || release_refuse "origin/main is $origin_main, not $commit — the candidate identity job requires the dispatched commit to be the head of main; land first, then pass that head"
-manifest_line=$("${GIT[@]}" show "${commit}:Cargo.toml" | sed -n '/^\[package\]/,/^\[/p' | grep -m1 '^version' || true)
+manifest_line=$("${GIT[@]}" show "${commit}:Cargo.toml" | sed -n '/^\[workspace\.package\]/,/^\[/p; /^\[package\]/,/^\[/p' | grep -m1 '^version' || true)
 manifest_version=$(sed -E 's/^version *= *"([^"]+)".*/\1/' <<<"$manifest_line")
 [ "$manifest_version" = "$version" ] || release_refuse "Cargo.toml at $commit says '${manifest_line:-<no version line>}', not version $version"
 [ -z "$("${GIT[@]}" ls-remote --tags origin "refs/tags/$tag")" ] || release_refuse "tag $tag already exists on origin — a candidate is dispatched before the tag, never after"

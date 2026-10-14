@@ -2,7 +2,7 @@
 
 ## Brief
 
-`relay` is the online **single-cast pull work-queue broker** in the Axiom stack
+`relay` is the online **single-cast pull work-queue broker** in the faberline stack
 (RabbitMQ/SQS-shaped): a producer publishes a task, a worker **pulls** (leases)
 it, runs it, and acks — each message is delivered exactly once to one of the
 competing consumers, then reclaimed (**delete-on-ack**). It owns work-queue
@@ -11,7 +11,7 @@ visibility, h2c/OpenAPI transport, and raft-backed HA. Payloads stay opaque JSON
 so higher-level systems (loom, worker runtimes) use relay without relay learning
 their domain model.
 
-Relay is the pull side of Axiom's queue family; [`defer`](https://github.com/faberline/defer/blob/main) is the push
+Relay is the pull side of faberline's queue family; [`defer`](https://github.com/faberline/defer/blob/main) is the push
 side for scheduled HTTP dispatch. Relay is deliberately **not** a Kafka/pub-sub
 platform: durable topic replay/retention is [`tape`](https://github.com/faberline/tape/blob/main)'s job, and
 push/ETA task dispatch is [`defer`](https://github.com/faberline/defer/blob/main)'s. Concurrency is
@@ -26,7 +26,7 @@ orders only entries that are already visible in the work queue; long-horizon ETA
 rate limiting, and HTTP target dispatch remain Defer concerns.
 
 Relay ships as **one binary**: bare `relay` serves (h2c broker; raft-runtime
-auto-mode HA — see [`HA.md`](HA.md)), and the same bin carries the offline
+auto-mode HA — see [`docs/ha.md`](docs/ha.md)), and the same bin carries the offline
 `spec`/`spec gen [--target <profile>]`, `backup`, `k8s crd|operator|instance`, `dockerfile render`,
 and shared `llm`/`upgrade`/`issue` verbs (WIs #1204-#1209, the
 service-archetype convergence).
@@ -65,7 +65,7 @@ downward-API env (`REPLICAS_PER_SHARD` > 1) flips replica mode.
 
 - Gate: `cargo test -p relay --test raft_core --test raft_persistence --test raft_cluster`
 - Dogfood: `scripts/kind-failover-smoke.sh`
-- Source: `src/raft.rs`, [`HA.md`](HA.md)
+- Source: `src/cluster/raft.rs`, [`docs/ha.md`](docs/ha.md)
 
 ### Interface
 
@@ -180,7 +180,7 @@ second copy of those contracts.
 #### Competitive feature parity
 
 Cover the baseline single-cast work-queue broker functions Relay needs to
-compete with RabbitMQ, NATS JetStream, Redis Streams, and Dragonfly in Axiom
+compete with RabbitMQ, NATS JetStream, Redis Streams, and Dragonfly in faberline
 workloads. Redpanda/Kafka-class replay journals are `tape` competitors, not
 relay competitors.
 
@@ -199,7 +199,7 @@ calibration is promoted. Claims remain workload-scoped.
 - Efficiency: `bash scripts/ec-evidence.sh performance-efficiency`
 - Throughput ratchet: `vat run meter-perf`
 - Comparison harness: `cargo run -p relay --release --example bench_compare -- --backend <target>`
-  (advisory ratio wrapper: `apps/arena/examples/relay-vs-rabbitmq-nats-redis.toml`)
+  (advisory ratio wrapper: [`faberline/arena` `examples/relay-vs-rabbitmq-nats-redis.toml`](https://github.com/faberline/arena/blob/main/examples/relay-vs-rabbitmq-nats-redis.toml))
 
 Last real Relay/RabbitMQ/NATS bulk lifecycle calibration: 2026-07-17, recorded
 in `docs/perf-gate.md`.

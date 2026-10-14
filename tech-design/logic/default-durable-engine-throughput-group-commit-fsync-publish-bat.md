@@ -116,7 +116,7 @@ definitions:
     properties:
       outcomes:
         type: array
-        items: { x-rust-type: "crate::types::AppendOutcome" }
+        items: { x-rust-type: "crate::broker::types::AppendOutcome" }
 ```
 ## Rest Api
 <!-- type: rest-api lang: yaml -->
@@ -215,37 +215,37 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: src/log.rs
+  - path: src/broker/log.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "append_many: write a batch of entries then issue ONE sync_all (group commit). Persist/load the committed-offset sidecar (<subject>__shardN.commit), group-committed."
-  - path: src/workqueue.rs
+  - path: src/broker/workqueue.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "recover(committed): set next_offer and committed watermark on open so committed entries are never re-offered."
-  - path: src/engine.rs
+  - path: src/broker/engine.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "publish_batch (group-commit append_many); recover the committed offset when a subject opens; persist the committed offset after ack / ack-batch."
-  - path: src/config.rs
+  - path: src/broker/config.rs
     action: modify
     section: config
     impl_mode: hand-written
     reason: "Default to durable, power-safe storage (data_dir set, fsync = Always); group commit makes the batch path cheap."
-  - path: src/wire.rs
+  - path: src/transport/wire.rs
     action: modify
     section: schema
     impl_mode: hand-written
     reason: "PublishBatchItem / PublishBatchRequest / PublishBatchResponse DTOs."
-  - path: src/server.rs
+  - path: src/transport/server.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "POST /v1/{subject}/publish-batch handler (JSON + CBOR)."
-  - path: src/openapi.rs
+  - path: src/transport/openapi.rs
     action: modify
     section: rest-api
     impl_mode: hand-written

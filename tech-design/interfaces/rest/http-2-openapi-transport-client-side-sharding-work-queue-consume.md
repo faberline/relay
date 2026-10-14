@@ -787,32 +787,32 @@ changes:
     section: logic
     impl_mode: hand-written
     reason: "Wire in the transport modules (wire, shard, server, server_config, openapi, consume) and re-export them."
-  - path: src/wire.rs
+  - path: src/transport/wire.rs
     action: create
     section: schema
     impl_mode: hand-written
     reason: "Transport DTOs (PublishRequest/Response, PublishBatchRequest/Response, LeaseRequest/Response, AckRequest/Response, Heartbeat/LeaseBatch/AckBatch DTOs) plus application/cbor encode/decode and a general length-prefixed CBOR framing utility."
-  - path: src/consume.rs
+  - path: src/transport/consume.rs
     action: create
     section: logic
     impl_mode: hand-written
     reason: "The primary streaming work-queue consume path: one bidi h2 stream, ConsumeUp (Subscribe/Ack/Nack) up-frames and LeasedEntry down-frames, length-prefixed JSON, bounded by the Subscribe prefetch credit window; wakes on publish/release instead of polling (#465)."
-  - path: src/shard.rs
+  - path: src/broker/shard.rs
     action: create
     section: logic
     impl_mode: hand-written
     reason: "Client-side sharding helper: shard_for(key, shards) = crc32(key) % shards."
-  - path: src/server_config.rs
+  - path: src/transport/server_config.rs
     action: create
     section: config
     impl_mode: hand-written
     reason: "RelayServerConfig per the Config contract (bind, h2c, shards, reconcile_interval_ms, embedded RelayCoreConfig)."
-  - path: src/server.rs
+  - path: src/transport/server.rs
     action: create
     section: logic
     impl_mode: hand-written
     reason: "axum h2c app: shared AppState over the relay core; publish/publish-batch and the deprecated-but-retained lease/ack/lease-batch/ack-batch/heartbeat handlers (JSON + CBOR); routes /consume to consume.rs."
-  - path: src/openapi.rs
+  - path: src/transport/openapi.rs
     action: create
     section: rest-api
     impl_mode: hand-written

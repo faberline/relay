@@ -1,7 +1,7 @@
 // HANDWRITE-BEGIN gap="missing-generator:logic:f9ee58f0" tracker="pending-tracker" reason="Relay preserves public backup helper names while shared service-backup owns authenticated admin-snapshot transport and sink upload; Relay retains only its snapshot/restore semantics."
 //! `relay backup` (WI #1209): fetch a consistent snapshot from a running
 //! node's `GET /admin/backup` endpoint and hand the exact bytes to a
-//! `libs/service-backup` destination sink. This module owns NO snapshot
+//! `core/service-backup` destination sink. This module owns NO snapshot
 //! logic — the endpoint serves the same `raft::snapshot_bytes` serialization
 //! (`EngineSnapshot` = `dump_live` + applied index) the raft snapshotter
 //! uses; this is transport + shipping only, meant to be driven by the
@@ -10,7 +10,7 @@
 //! (lumen #808 pattern).
 //!
 //! Restore is library-side exact state replacement: feed the artifact to
-//! `crate::raft::load_snapshot_bytes`. Log sequence space, committed offsets,
+//! `crate::cluster::raft::load_snapshot_bytes`. Log sequence space, committed offsets,
 //! active fenced leases, and delayed/retry state survive the round trip.
 
 pub use service_backup::{

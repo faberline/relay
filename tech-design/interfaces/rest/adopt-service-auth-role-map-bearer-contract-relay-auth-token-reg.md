@@ -124,7 +124,7 @@ requirements:
     text: "The relay CLI gains --auth (env RELAY_AUTH, default off) and --token-registry-file (env RELAY_TOKEN_REGISTRY_FILE) as serve flags with env fallback; existing bare-serve flags keep parsing and the llm operations topic documents the knobs."
     kind: functional
     risk: low
-    verify: src/bin/relay.rs::tests::cli_parse_surface
+    verify: src/bin/relay/main.rs::tests::cli_parse_surface
   shared_error_shape:
     id: R4
     text: "Auth rejections render the shared service-auth JSON shape consistent with the ApiErr envelope family: 401 body {\"error\":\"unauthenticated\",...} and 403 body {\"error\":\"forbidden\",\"message\":\"subject ... lacks ... on ...\"}."
@@ -151,7 +151,7 @@ flowchart TD
     r3[R3 read role mapping] --> tests_auth_rs_consume_side_requires_read_grant_on_subject[tests/auth.rs::consume_side_requires_read_grant_on_subject]
     r3[R3 streaming consume guard] --> tests_auth_rs_streaming_consume_enforces_read_grant[tests/auth.rs::streaming_consume_enforces_read_grant]
     r4[R4 shared error shape] --> tests_auth_rs_error_bodies_use_shared_service_auth_shape[tests/auth.rs::error_bodies_use_shared_service_auth_shape]
-    r5[R5 serve flags] --> src_bin_relay_rs_tests_cli_parse_surface[src/bin/relay.rs::tests::cli_parse_surface]
+    r5[R5 serve flags] --> src_bin_relay_rs_tests_cli_parse_surface[src/bin/relay/main.rs::tests::cli_parse_surface]
     r6[R6 probes auth exempt] --> tests_auth_rs_probes_stay_tokenless_under_required_auth[tests/auth.rs::probes_stay_tokenless_under_required_auth]
 ```
 ## Changes
@@ -164,7 +164,7 @@ changes:
     section: logic
     impl_mode: hand-written
     description: "Add the service-auth path dependency (shared bearer middleware, role_map StaticRoleMapVerifier, registry loader, shared 401/403 error shape)."
-  - path: src/auth.rs
+  - path: src/transport/auth.rs
     action: create
     section: logic
     impl_mode: hand-written
@@ -174,22 +174,22 @@ changes:
     section: logic
     impl_mode: hand-written
     description: "Register pub mod auth in the crate root module wiring."
-  - path: src/server.rs
+  - path: src/transport/server.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "AppState carries Arc<StaticRoleMapVerifier> (AppState::new stays open for tokenless dev/tests; AppState::with_auth takes the resolved AuthConfig); router() route_layers service_auth::auth_middleware on the /v1 data-plane router ONLY (probes stay exempt; metrics::track stays outermost so auth rejections are still counted); every data-plane handler gains the Extension<RoleMapPrincipal> and enforces write (publish/publish-batch) or read (lease/ack/lease-batch/ack-batch/heartbeat/len) on the {subject} path param via auth::authorize."
-  - path: src/consume.rs
+  - path: src/transport/consume.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "The streaming consume handler takes the Extension<RoleMapPrincipal> and enforces a read grant on its subject before reading the Subscribe handshake."
-  - path: src/bin/relay.rs
+  - path: src/bin/relay/main.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "ServeArgs gains --auth (env RELAY_AUTH, off|required, default off) and --token-registry-file (env RELAY_TOKEN_REGISTRY_FILE) with env fallback like --bind; serve_main resolves AuthConfig (fail fast: nonzero exit on a bad/missing registry under required) and builds AppState::with_auth; cli_parse_surface covers the new flags."
-  - path: src/llm.rs
+  - path: src/bin/relay/llm.rs
     action: modify
     section: logic
     impl_mode: hand-written

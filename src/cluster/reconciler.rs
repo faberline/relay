@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use chrono::Utc;
 
-use crate::engine::Relay;
-use crate::raft::RelayRaft;
+use crate::broker::engine::Relay;
+use crate::cluster::raft::RelayRaft;
 
 /// Handle to a running reconciler; drop or [`stop`](ReconcilerHandle::stop) to
 /// end the background sweep.

@@ -18,7 +18,7 @@ use chrono::{DateTime, Duration, Utc};
 use raft_runtime::{FenceToken, FencedAssignment};
 use serde::{Deserialize, Serialize};
 
-use crate::types::{CommittedOffset, Lease, Seq, ShardId};
+use crate::broker::types::{CommittedOffset, Lease, Seq, ShardId};
 
 /// Number of priority bands (0 = lowest, 255 = highest).
 /// Small + bounded so `pick` stays O(bands) ≈ O(1). Every `u8` value maps to a

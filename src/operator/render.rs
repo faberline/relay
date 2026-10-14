@@ -122,7 +122,7 @@ pub fn render(relay: &Relay) -> Vec<Value> {
 /// (`GET /admin/backup`, the exact `RelayStateMachine::snapshot` bytes); this
 /// CronJob adds nothing to the snapshot path — it only *schedules and
 /// transports* that endpoint's bytes to a destination via `relay backup`
-/// (`libs/service-backup`). The shared [`service_k8s::render::cron_job`] helper
+/// (`core/service-backup`). The shared [`service_k8s::render::cron_job`] helper
 /// stays manifest-only (lumen #808).
 fn backup_cron_job(relay: &Relay, cx: &RenderCtx<'_>) -> Option<Value> {
     let policy = relay.spec.backup.as_ref()?;

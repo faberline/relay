@@ -23,8 +23,8 @@ use service_auth::{AuditedRoleMapPrincipal, Role};
 use service_http::ApiErr;
 use tokio::sync::mpsc;
 
-use crate::engine::Relay;
-use crate::server::AppState;
+use crate::broker::engine::Relay;
+use crate::transport::server::AppState;
 
 static CONSUMER_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -107,7 +107,7 @@ pub async fn consume(
 ) -> Response {
     // Consume-family authorization (#1206): a read grant on the subject,
     // checked before the Subscribe handshake is even read.
-    if let Err(deny) = crate::auth::authorize(&principal, &subject, Role::Read) {
+    if let Err(deny) = crate::transport::auth::authorize(&principal, &subject, Role::Read) {
         return deny.into_response();
     }
     let consumer_id = format!("consume-{}", CONSUMER_SEQ.fetch_add(1, Ordering::Relaxed));
@@ -156,7 +156,7 @@ pub async fn consume(
 /// flight (lease + push), freeing a credit per Ack/Nack; wake on publish.
 async fn drive(
     relay: std::sync::Arc<Relay>,
-    raft: Option<std::sync::Arc<crate::raft::RelayRaft>>,
+    raft: Option<std::sync::Arc<crate::cluster::raft::RelayRaft>>,
     subject: String,
     consumer_id: String,
     prefetch: u32,

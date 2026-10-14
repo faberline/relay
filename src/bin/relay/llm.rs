@@ -2,7 +2,7 @@
 //! relay's agent-facing CLI identity: the build-stamped [`TOOL`] info and the
 //! `relay llm` topic list — the single in-code source of truth shared by the
 //! standard `llm` / `upgrade` / `issue` commands (CONTRIBUTING.md CLI
-//! convention). Compiled into the `relay` bin via `#[path]` include.
+//! convention).
 
 /// This binary's identity + build provenance for the standard CLI ops
 /// (`upgrade` / `issue`), per the CONTRIBUTING.md CLI convention.
@@ -109,3 +109,28 @@ pub const TOPICS: &[cli_std::llm::Topic] = &[
     },
 ];
 // HANDWRITE-END
+
+/// `relay llm` flags.
+#[derive(clap::Args, Debug)]
+pub(crate) struct LlmArgs {
+    /// Topic id (`outline` lists them all).
+    #[arg(default_value = "outline")]
+    pub(crate) topic: String,
+    /// Output format: `md` (default) or `json`.
+    #[arg(long, default_value = "md")]
+    pub(crate) format: String,
+}
+
+/// `relay llm` — print agent-facing topics. Offline: no engine, no server,
+/// no I/O beyond stdout.
+pub(crate) fn run(args: LlmArgs) -> anyhow::Result<()> {
+    let out = cli_std::llm::render(
+        TOOL.project,
+        TOOL.version,
+        TOPICS,
+        &args.topic,
+        cli_std::llm::Format::parse(&args.format),
+    )?;
+    println!("{out}");
+    Ok(())
+}

@@ -136,7 +136,7 @@ requirements:
     text: "The relay llm operations topic replaces the relay-raft paragraph with the auto-mode story: REPLICAS_PER_SHARD > 1 flips HA on the single relay bin, RELAY_PEERS overrides peer DNS for a local multi-node group, and the leases-not-replicated / at-least-once failover limitation is stated."
     kind: functional
     risk: low
-    verify: src/llm.rs operations topic body (relay llm operations)
+    verify: src/bin/relay/llm.rs operations topic body (relay llm operations)
   raft_core_sim_kept_honest:
     id: R5
     text: "tests/raft_core.rs (the deterministic relay-integration simulation) keeps compiling honestly against the raft_core crate directly as a dev-dependency — relay no longer re-exports the consensus core surface it does not own."
@@ -172,7 +172,7 @@ flowchart TD
     r4[R4 k8s standard contract] --> manifest_review_projects_relay_k8s_statefulset_yaml_projects_relay_dockerfile[manifest review: k8s/statefulset.yaml + Dockerfile]
     r5[R5 failover no committed loss] --> tests_raft_persistence_rs_restart_rejoins_with_applied_state_intact[tests/raft_persistence.rs::restart_rejoins_with_applied_state_intact]
     r5[R5 raft core sim kept honest] --> tests_raft_core_rs_relay_engines_converge_across_failover[tests/raft_core.rs::relay_engines_converge_across_failover]
-    r6[R6 llm operations auto mode] --> src_llm_rs_operations_topic_body_relay_llm_operations[src/llm.rs operations topic body (relay llm operations)]
+    r6[R6 llm operations auto mode] --> src_llm_rs_operations_topic_body_relay_llm_operations[src/bin/relay/llm.rs operations topic body (relay llm operations)]
 ```
 ## Changes
 <!-- type: changes lang: yaml -->
@@ -184,12 +184,12 @@ changes:
     section: logic
     impl_mode: hand-written
     description: "Add the raft-runtime path dependency (shared driver: RaftHost, RaftStore, RaftStateMachine, ClusterTopology, OutcomeWindow, SnapshotPolicy); demote raft-core to dev-dependencies (only the tests/raft_core.rs simulation drives the consensus core directly); drop the [[bin]] relay-raft target."
-  - path: src/raft.rs
+  - path: src/cluster/raft.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Rewrite from the raft_core re-export shim to the raft-runtime adoption surface: PubCommand { subject, message_id, payload, headers, priority, not_before } (the replicated command, multi-subject); RelayStateMachine (apply = idempotent Relay::publish_at + OutcomeWindow outcome stash + fsynced applied-marker floor; snapshot = up_to + Relay::dump_live; restore = Relay::load_live + floor := up_to; applied_index recovered from the marker at construction); RelayRaft (single-group wrapper: RaftStore::open on {data_dir}/raft, RaftHost::spawn, router() passthrough, publish() = propose + claim outcome, from_topology(ClusterTopology) constructor, is_leader/leader/applied_index accessors)."
-  - path: src/engine.rs
+  - path: src/broker/engine.rs
     action: modify
     section: logic
     impl_mode: hand-written
@@ -219,17 +219,17 @@ changes:
     section: logic
     impl_mode: hand-written
     description: "Drop the raft_driver/raft_store/raft_config modules and their re-exports (RaftDriver, RaftStore, RaftClusterConfig, ordinal_from_hostname, peer_urls, and the raft_core type re-exports); export PubCommand, RelayStateMachine, RelayRaft from the rewritten raft module."
-  - path: src/server.rs
+  - path: src/transport/server.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "AppState optionally carries Arc<RelayRaft> (set_raft/raft accessors); the publish and publish-batch handlers propose PubCommand through the host when HA is on (returning the engine {seq, deduped} claimed from the OutcomeWindow; idempotent direct-engine fallback if the outcome aged out) and keep the direct-engine path otherwise; all other verbs stay node-local."
-  - path: src/bin/relay.rs
+  - path: src/bin/relay/main.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Auto-mode serve: --peer-service flag (RELAY_PEER_SERVICE, default relay); when raft_runtime::cluster::replica_mode() — ClusterTopology::from_env('relay', peer_service, port-from-bind, 'RELAY_PEERS'), RelayRaft::from_topology over the serve engine with the core data dir, state.set_raft, app.merge(raft.router()) outside the bearer-auth data plane; single-node path unchanged."
-  - path: src/llm.rs
+  - path: src/bin/relay/llm.rs
     action: modify
     section: logic
     impl_mode: hand-written
@@ -263,5 +263,5 @@ changes:
     action: modify
     section: unit-test
     impl_mode: hand-written
-    description: "Keep the deterministic relay-integration simulation compiling honestly: import the consensus core from raft_core directly (dev-dependency) instead of relay::raft re-exports; scenarios unchanged."
+    description: "Keep the deterministic relay-integration simulation compiling honestly: import the consensus core from raft_core directly (dev-dependency) instead of relay::cluster::raft re-exports; scenarios unchanged."
 ```
