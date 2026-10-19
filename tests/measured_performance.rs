@@ -259,10 +259,9 @@ fn durable_lifecycle_report_child() {
 #[test]
 #[ignore = "release-mode production performance gate"]
 fn measured_durable_lifecycle_gate() {
-    assert!(
-        !cfg!(debug_assertions),
-        "production performance gate must run with --release"
-    );
+    if cfg!(debug_assertions) {
+        panic!("production performance gate must run with --release");
+    }
     let output = Command::new(std::env::current_exe().expect("current integration test binary"))
         .args([
             "--exact",
