@@ -1,7 +1,7 @@
 version = 2
 project = "relay"
 ir_kind = "td"
-td_path = "apps/relay/tech-design"
+td_path = "tech-design"
 generated_at = "2026-07-20T13:27:52.909397+00:00"
 digest = "sha256:47142e50c7e2879241c2439f447ab3f1e39f9a3a8a559bd72e878b0e573ce5a3"
 source_digest = "sha256:47142e50c7e2879241c2439f447ab3f1e39f9a3a8a559bd72e878b0e573ce5a3"

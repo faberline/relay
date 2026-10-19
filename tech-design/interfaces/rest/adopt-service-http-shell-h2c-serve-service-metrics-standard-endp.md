@@ -27,7 +27,7 @@ nodes:
     label: "AppState::new: relay core + Arc<RelayMetrics> + draining AtomicBool; spawn_reconciler; AppState implements service_http::ReadinessHook and MetricsProvider"
   build:
     kind: process
-    label: "router(): /v1 data plane with route_layer(metrics::track) merged onto service_http::standard_probe_routes(state, Some(metrics), crate::openapi::openapi); outer service_http::trace_layer()"
+    label: "router(): /v1 data plane with route_layer(metrics::track) merged onto service_http::standard_probe_routes(state, Some(metrics), crate::transport::openapi::openapi); outer service_http::trace_layer()"
   serve:
     kind: process
     label: "service_http::serve(listener, app, shutdown_with_drain(start_drain, grace)) — HTTP/1.1 + h2c on the one serve port"
@@ -105,7 +105,7 @@ requirements:
     text: "The relay CLI gains --grace-secs (env RELAY_GRACE_SECS, default 10) feeding shutdown_with_drain's grace window; existing bare-serve flags keep parsing."
     kind: functional
     risk: low
-    verify: src/bin/relay.rs::tests::cli_parse_surface
+    verify: src/bin/relay/main.rs::tests::cli_parse_surface
   h2c_and_h1_one_port:
     id: R1
     text: "service_http::serve serves HTTP/2 prior-knowledge (h2c, via libs/transport-h2c h2c_client) AND HTTP/1.1 requests on the same port — replacing the HTTP/1-only axum::serve."
@@ -126,7 +126,7 @@ requirements:
     verify: tests/http2_transport.rs::probe_surface_answers_on_serve_port
 ---
 flowchart TD
-    r1[R1 grace flag] --> src_bin_relay_rs_tests_cli_parse_surface[src/bin/relay.rs::tests::cli_parse_surface]
+    r1[R1 grace flag] --> src_bin_relay_rs_tests_cli_parse_surface[src/bin/relay/main.rs::tests::cli_parse_surface]
     r1[R1 h2c and h1 one port] --> tests_http2_transport_rs_h2c_and_http11_share_the_serve_port[tests/http2_transport.rs::h2c_and_http11_share_the_serve_port]
     r2[R2 drain readyz] --> tests_http2_transport_rs_readyz_flips_to_503_on_drain[tests/http2_transport.rs::readyz_flips_to_503_on_drain]
     r3[R3 metrics counters] --> tests_http2_transport_rs_metrics_report_relay_request_counters_after_traffic[tests/http2_transport.rs::metrics_report_relay_request_counters_after_traffic]
@@ -144,7 +144,7 @@ changes:
     section: logic
     impl_mode: hand-written
     description: "Add service-http + metrics-prometheus path deps and tracing + tracing-subscriber (env-filter) for the shared shell and serve-path tracing init."
-  - path: src/metrics.rs
+  - path: src/transport/metrics.rs
     action: create
     section: logic
     impl_mode: hand-written
@@ -154,22 +154,22 @@ changes:
     section: logic
     impl_mode: hand-written
     description: "Register pub mod metrics in the crate root module wiring."
-  - path: src/server.rs
+  - path: src/transport/server.rs
     action: modify
     section: logic
     impl_mode: hand-written
-    description: "AppState gains Arc<RelayMetrics> + draining AtomicBool with start_drain(); implements service_http::ReadinessHook and MetricsProvider; router() merges service_http::standard_probe_routes(state, Some(metrics), crate::openapi::openapi) with the /v1 data plane (route_layer metrics::track) under an outer service_http::trace_layer(); hand-rolled healthz + openapi_json handlers/routes deleted; bare (StatusCode, String) error returns become service_http::ApiErr (400 bad_request decode, 500 internal engine/encode); the /v1 prefix and CBOR success fast path are untouched."
-  - path: src/consume.rs
+    description: "AppState gains Arc<RelayMetrics> + draining AtomicBool with start_drain(); implements service_http::ReadinessHook and MetricsProvider; router() merges service_http::standard_probe_routes(state, Some(metrics), crate::transport::openapi::openapi) with the /v1 data plane (route_layer metrics::track) under an outer service_http::trace_layer(); hand-rolled healthz + openapi_json handlers/routes deleted; bare (StatusCode, String) error returns become service_http::ApiErr (400 bad_request decode, 500 internal engine/encode); the /v1 prefix and CBOR success fast path are untouched."
+  - path: src/transport/consume.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Read the first up-frame before returning the response head: a non-Subscribe (or undecodable) first frame returns ApiErr 400 bad_request in the shared envelope instead of a silent empty 200 stream; drive() takes the primed prefetch/decoder."
-  - path: src/openapi.rs
+  - path: src/transport/openapi.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Add pub fn openapi() -> utoipa::openapi::OpenApi (the document accessor standard_probe_routes wants); api_doc_json() reuses it."
-  - path: src/bin/relay.rs
+  - path: src/bin/relay/main.rs
     action: modify
     section: logic
     impl_mode: hand-written

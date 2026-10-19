@@ -3,7 +3,7 @@
 //! utoipa OpenAPI document for the relay HTTP/2 transport.
 //!
 //! The path operations are declared by `#[utoipa::path]` on the
-//! [`crate::server`] handlers; this module collects them into one document and
+//! [`crate::transport::server`] handlers; this module collects them into one document and
 //! renders it as JSON for the `/openapi.json` endpoint.
 
 use utoipa::OpenApi;
@@ -18,16 +18,16 @@ use utoipa::OpenApi;
         description = "Single-cast work-queue broker over HTTP/2 (h2c), no gRPC. JSON contract with an application/cbor fast path for lease/ack and a length-prefixed frame stream for consume."
     ),
     paths(
-        crate::server::publish,
-        crate::server::publish_batch,
-        crate::consume::consume,
-        crate::server::lease,
-        crate::server::ack,
-        crate::server::lease_batch,
-        crate::server::ack_batch,
-        crate::server::heartbeat,
-        crate::server::log_len,
-        crate::server::admin_backup,
+        crate::transport::server::publish,
+        crate::transport::server::publish_batch,
+        crate::transport::consume::consume,
+        crate::transport::server::lease,
+        crate::transport::server::ack,
+        crate::transport::server::lease_batch,
+        crate::transport::server::ack_batch,
+        crate::transport::server::heartbeat,
+        crate::transport::server::log_len,
+        crate::transport::server::admin_backup,
     )
 )]
 pub struct ApiDoc;

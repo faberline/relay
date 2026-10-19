@@ -101,7 +101,7 @@ definitions:
     properties:
       leases:
         type: array
-        items: { x-rust-type: "crate::types::Lease" }
+        items: { x-rust-type: "crate::broker::types::Lease" }
 
   AckOne:
     type: object
@@ -284,32 +284,32 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: src/workqueue.rs
+  - path: src/broker/workqueue.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "O(1) next-eligible cursor (next_offer + redeliver BinaryHeap) replacing the O(n) scan; committed watermark advanced incrementally; add lease_batch and ack_batch. Phase 5: replace the monotonic next_offer cursor with PRIORITY_BANDS bands (each a fresh VecDeque + redeliver min-heap); pick scans bands high->low (O(bands)); offer_fresh(seq, priority) feeds entries in at publish; priority_of routes reclaim/promote/release into the right band; LogEntry/PublishRequest gain priority (recovery rebuilds bands from persisted priority)."
-  - path: src/engine.rs
+  - path: src/broker/engine.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Per-(subject,shard) locking: subjects behind RwLock<HashMap<String, Arc<Mutex<SubjectState>>>>; methods take &self with interior locking; add lease_batch / ack_batch; reconcile locks each shard independently. Phase 5: publish/publish_batch offer_fresh each new entry into its priority band (publish_at gains a priority arg); recovery offer_fresh/register_delayed the un-acked tail with each entry's persisted priority."
-  - path: src/wire.rs
+  - path: src/transport/wire.rs
     action: modify
     section: schema
     impl_mode: hand-written
     reason: "LeaseBatchRequest/Response, AckOne, AckBatchRequest/Response DTOs."
-  - path: src/server.rs
+  - path: src/transport/server.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "AppState holds Arc<Relay> (no global mutex); add POST lease-batch / ack-batch handlers (JSON + CBOR)."
-  - path: src/openapi.rs
+  - path: src/transport/openapi.rs
     action: modify
     section: rest-api
     impl_mode: hand-written
     reason: "Add lease-batch and ack-batch paths to the served OpenAPI."
-  - path: src/reconciler.rs
+  - path: src/cluster/reconciler.rs
     action: modify
     section: logic
     impl_mode: hand-written

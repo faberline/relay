@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a public, redacted GKE release receipt for one shared-script app.
+"""Create a public, redacted GKE release receipt for relay.
 
 The receipt binds one verified release candidate (its final manifest bytes,
 commit, run, and image digests) to one digest-pinned GKE acceptance run. Two
@@ -10,7 +10,7 @@ evidence backends exist, selected per app by scripts/release/apps.sh:
   --backend gke-acceptance  one .github/workflows/gke-acceptance.yml run that
                             was dispatched with the candidate image: the
                             `gh run view --json ...` record plus the downloaded
-                            evidence bundle. Used by keep, relay, and defer.
+                            evidence bundle. Used by relay.
 
 The evidence bundle carries a kubeconfig; this script never reads, hashes,
 or copies it. `--self-test` exercises both backends on synthetic evidence,
@@ -54,18 +54,7 @@ TWO_TARGETS = ("x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl")
 
 # Mirrors scripts/release/apps.sh; verify-release-contract.py cross-checks the two.
 APPS: Dict[str, Dict[str, Any]] = {
-    "sift": {
-        "backend": "gcp",
-        "targets": FIVE_TARGETS,
-        "functional": SIFT_FIELDS,
-        "acceptance_schema": "axiom.gcp.sift.acceptance.v1",
-        "image_companions": ("lumen",),
-        "acceptance_companions": ("lumen", "auth"),
-        "extra_keys": {"schema", "gcs_object", "gcs_object_bytes", "topology_beyond_1x1"},
-    },
-    "keep": {"backend": "gke-acceptance", "targets": TWO_TARGETS, "functional": HARNESS_FIELDS},
     "relay": {"backend": "gke-acceptance", "targets": TWO_TARGETS, "functional": HARNESS_FIELDS},
-    "defer": {"backend": "gke-acceptance", "targets": TWO_TARGETS, "functional": HARNESS_FIELDS},
 }
 
 
@@ -604,8 +593,8 @@ def self_test() -> None:
     with tempfile.TemporaryDirectory() as tmp_name:
         tmp = Path(tmp_name)
 
-        # --- gke-acceptance backend (keep) ---------------------------------
-        app = "keep"
+        # --- gke-acceptance backend (relay) ---------------------------------
+        app = "relay"
         base = tmp / app
         candidate = fixture_candidate(app, "0.4.13", commit)
         image = f"{IMAGE_OWNER}/{app}@{candidate['image']['root_digest']}"
@@ -617,10 +606,10 @@ def self_test() -> None:
         write_harness_evidence(app, evidence, image)
         output = base / f"{app}-gke-receipt.json"
 
-        def run_keep(manifest=manifest_path, gh=gh_run_path, ev=evidence, out=output):
+        def run_relay(manifest=manifest_path, gh=gh_run_path, ev=evidence, out=output):
             return make_receipt(app, "gke-acceptance", manifest, out, gh_run=gh, evidence_dir=ev)
 
-        receipt = run_keep()
+        receipt = run_relay()
         positive += 1
         assert receipt["gke"]["run_id"] == "gha-99001-1", receipt["gke"]
         assert receipt["gke"]["backend"] == "gke-acceptance"
@@ -633,7 +622,7 @@ def self_test() -> None:
         assert receipt["redaction"]["kubeconfig_retained"] is False
         sidecar = output.with_name(output.name + ".sha256")
         assert sidecar.read_text() == f"{sha256(output.read_bytes())}  {output.name}\n"
-        expect_refusal("wrong backend for keep", lambda: make_receipt(app, "gcp", manifest_path, output, run=gh_run_path, images=gh_run_path, acceptance=gh_run_path, cleanup=gh_run_path))
+        expect_refusal("wrong backend for relay", lambda: make_receipt(app, "gcp", manifest_path, output, run=gh_run_path, images=gh_run_path, acceptance=gh_run_path, cleanup=gh_run_path))
         negative += 1
         expect_refusal("wrong output name", lambda: make_receipt(app, "gke-acceptance", manifest_path, base / "receipt.json", gh_run=gh_run_path, evidence_dir=evidence))
         negative += 1
@@ -644,7 +633,7 @@ def self_test() -> None:
             mutate(record)
             path = base / f"gh-{negative}.json"
             _write_json(path, record)
-            expect_refusal(label, lambda: run_keep(gh=path))
+            expect_refusal(label, lambda: run_relay(gh=path))
             negative += 1
 
         def acceptance_job(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -657,8 +646,8 @@ def self_test() -> None:
         mutated_gh("run not completed", lambda r: r.update(status="in_progress"))
         mutated_gh("headSha mismatch", lambda r: r.update(headSha="f" * 40))
         mutated_gh("displayTitle without image", lambda r: r.update(displayTitle=f"gke-acceptance {app} @ {commit}"))
-        mutated_gh("displayTitle other app", lambda r: r.update(displayTitle=f"gke-acceptance relay @ {commit} image={image}"))
-        mutated_gh("other workflow", lambda r: r.update(workflowName="keep-test-image"))
+        mutated_gh("displayTitle other app", lambda r: r.update(displayTitle=f"gke-acceptance keep @ {commit} image={image}"))
+        mutated_gh("other workflow", lambda r: r.update(workflowName="relay-test-image"))
         mutated_gh("push event", lambda r: r.update(event="push"))
         mutated_gh("foreign url", lambda r: r.update(url="https://github.com/someone/else/actions/runs/99001"))
         mutated_gh("build job ran", lambda r: r["jobs"][0].update(conclusion="success"))
@@ -673,7 +662,7 @@ def self_test() -> None:
             path = base / f"evidence-{negative}"
             shutil.copytree(evidence, path)
             mutate(path)
-            expect_refusal(label, lambda: run_keep(ev=path))
+            expect_refusal(label, lambda: run_relay(ev=path))
             negative += 1
 
         def drop(path: Path) -> None:
@@ -692,71 +681,19 @@ def self_test() -> None:
             mutate(record)
             path = base / f"manifest-{negative}.json"
             _write_json(path, record)
-            expect_refusal(label, lambda: run_keep(manifest=path))
+            expect_refusal(label, lambda: run_relay(manifest=path))
             negative += 1
 
         mutated_manifest("candidate job failed", lambda c: c["jobs"].update({"verify-candidate": "failure"}))
-        mutated_manifest("candidate job missing", lambda c: c["jobs"].pop("keep-release-gates"))
+        mutated_manifest("candidate job missing", lambda c: c["jobs"].pop("relay-release-gates"))
         mutated_manifest("root equals amd64", lambda c: c["image"].update(root_digest=c["image"]["amd64_digest"]))
-        mutated_manifest("foreign image repository", lambda c: c["image"].update(repository=f"{IMAGE_OWNER}/relay"))
-        mutated_manifest("tag mismatch", lambda c: c.update(tag="keep@0.4.14"))
+        mutated_manifest("foreign image repository", lambda c: c["image"].update(repository=f"{IMAGE_OWNER}/keep"))
+        mutated_manifest("tag mismatch", lambda c: c.update(tag="relay@0.4.14"))
         mutated_manifest("built from a branch", lambda c: c.update(source_ref="refs/heads/feature"))
         mutated_manifest("candidate tag not run scoped", lambda c: c.update(candidate_tag="release-candidate-1-1"))
         mutated_manifest("extra target", lambda c: c["artifacts"].append(dict(c["artifacts"][0], target="aarch64-apple-darwin")))
 
-        # --- gcp backend (sift) -------------------------------------------
-        app = "sift"
-        base = tmp / app
-        candidate = fixture_candidate(app, "0.1.2", commit)
-        image = f"{IMAGE_OWNER}/{app}@{candidate['image']['root_digest']}"
-        manifest_path = base / "final-candidate-manifest.json"
-        _write_json(manifest_path, candidate)
-        gcp = fixture_gcp(app, commit, image)
-        paths = {}
-        for name, value in gcp.items():
-            paths[name] = base / f"{name}.json"
-            _write_json(paths[name], value)
-        output = base / f"{app}-gke-receipt.json"
-
-        def run_sift(manifest=manifest_path, **overrides):
-            files = dict(paths)
-            files.update(overrides)
-            return make_receipt(app, "gcp", manifest, output, run=files["run"], images=files["images"], acceptance=files["acceptance"], cleanup=files["cleanup"])
-
-        receipt = run_sift()
-        positive += 1
-        assert receipt["gke"]["backend"] == "gcp"
-        assert receipt["gke"]["run_id"] == "rc-99001-1"
-        assert set(receipt["gke"]["functional"]) == set(SIFT_FIELDS)
-        assert set(receipt["evidence"]) == {"run_sha256", "images_sha256", "acceptance_sha256", "cleanup_sha256"}
-        expect_refusal("wrong backend for sift", lambda: make_receipt(app, "gke-acceptance", manifest_path, output, gh_run=paths["run"], evidence_dir=base))
-        negative += 1
-
-        def mutated_gcp(label: str, name: str, mutate: Callable[[Dict[str, Any]], None]) -> None:
-            nonlocal negative
-            record = copy.deepcopy(gcp[name])
-            mutate(record)
-            path = base / f"{name}-{negative}.json"
-            _write_json(path, record)
-            expect_refusal(label, lambda: run_sift(**{name: path}))
-            negative += 1
-
-        mutated_gcp("functional failed", "acceptance", lambda a: a["acceptance"][app].update(scheduled_backup="failed"))
-        mutated_gcp("topology claimed", "acceptance", lambda a: a["acceptance"][app].update(topology_beyond_1x1="passed"))
-        mutated_gcp("auth block missing", "acceptance", lambda a: a["acceptance"].pop("auth"))
-        mutated_gcp("acceptance run mismatch", "acceptance", lambda a: a.update(run_id="rc-other"))
-        mutated_gcp("empty backup object", "acceptance", lambda a: a["acceptance"][app].update(gcs_object_bytes=0))
-        mutated_gcp("images without lumen", "images", lambda i: i.pop("lumen"))
-        mutated_gcp("images other sift digest", "images", lambda i: i.update({app: f"{IMAGE_OWNER}/{app}@sha256:{'b' * 64}"}))
-        mutated_gcp("images tag not digest", "images", lambda i: i.update({app: f"{IMAGE_OWNER}/{app}:0.1.2"}))
-        mutated_gcp("dirty run", "run", lambda r: r.update(git_dirty=True))
-        mutated_gcp("run other commit", "run", lambda r: r.update(git_sha="f" * 12))
-        mutated_gcp("run rebuilt image", "run", lambda r: r.update(image_provenance="built"))
-        mutated_gcp("cleanup not clean", "cleanup", lambda c: c.update(status="leaked"))
-        mutated_gcp("cleanup other zone", "cleanup", lambda c: c.update(gke_zone="asia-east1-b"))
-        mutated_gcp("cleanup dropped preservation", "cleanup", lambda c: c["preserved"].update(artifact_registry=False))
-
-        expect_refusal("unknown app", lambda: make_receipt("loom", "gke-acceptance", manifest_path, base / "loom-gke-receipt.json", gh_run=paths["run"], evidence_dir=base))
+        expect_refusal("unknown app", lambda: make_receipt("loom", "gke-acceptance", manifest_path, base / "loom-gke-receipt.json", gh_run=gh_run_path, evidence_dir=evidence))
         negative += 1
     print(f"make-gke-release-receipt self-test PASS: {positive} positive, {negative} negative controls refused")
 

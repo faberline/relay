@@ -13,12 +13,12 @@
 //! come from `service_http::standard_probe_routes` merged with the `/v1`
 //! data plane; error responses render the shared `{error, message}` envelope
 //! ([`service_http::ApiErr`]); per-op request metrics are recorded by
-//! [`crate::metrics::track`] on the data plane.
+//! [`crate::transport::metrics::track`] on the data plane.
 //!
-//! Request auth is the shared `libs/service-auth` bearer contract (#1206):
+//! Request auth is the shared `core/service-auth` bearer contract (#1206):
 //! the blanket `service_auth::auth_middleware` runs on the `/v1` data plane
 //! ONLY (probes stay tokenless), injecting a [`RoleMapPrincipal`] each
-//! handler authorizes on its `{subject}` via [`crate::auth::authorize`] —
+//! handler authorizes on its `{subject}` via [`crate::transport::auth::authorize`] —
 //! publish family = write, consume family = read.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,10 +37,10 @@ use chrono::Utc;
 use service_auth::{AuditedRoleMapPrincipal, ReloadableRoleMapVerifier, Role};
 use service_http::{ApiErr, MetricsProvider};
 
-use crate::engine::Relay;
-use crate::metrics::RelayMetrics;
-use crate::server_config::RelayServerConfig;
-use crate::wire::{
+use crate::broker::engine::Relay;
+use crate::transport::metrics::RelayMetrics;
+use crate::transport::server_config::RelayServerConfig;
+use crate::transport::wire::{
     self, AckBatchRequest, AckBatchResponse, AckRequest, AckResponse, HeartbeatRequest,
     HeartbeatResponse, LeaseBatchRequest, LeaseBatchResponse, LeaseRequest, LeaseResponse,
     PublishBatchRequest, PublishBatchResponse, PublishRequest,
@@ -58,7 +58,7 @@ pub struct AppState {
     metrics: Arc<RelayMetrics>,
     draining: Arc<AtomicBool>,
     verifier: Arc<ReloadableRoleMapVerifier>,
-    raft: Option<Arc<crate::raft::RelayRaft>>,
+    raft: Option<Arc<crate::cluster::raft::RelayRaft>>,
     body_limit_bytes: usize,
 }
 
@@ -85,7 +85,7 @@ impl AppState {
     /// verifier when auth is required, the open verifier when off.
     pub fn with_auth(
         config: RelayServerConfig,
-        auth: crate::auth::AuthConfig,
+        auth: crate::transport::auth::AuthConfig,
         body_limit_bytes: usize,
     ) -> Self {
         let mut state = AppState::new(config, body_limit_bytes);
@@ -101,12 +101,12 @@ impl AppState {
     /// Attach the raft group (replica/HA mode, #544): every authoritative
     /// mutation proposes through it instead of writing the engine directly. The group
     /// MUST replicate into this state's engine (`relay_handle()`).
-    pub fn set_raft(&mut self, raft: Arc<crate::raft::RelayRaft>) {
+    pub fn set_raft(&mut self, raft: Arc<crate::cluster::raft::RelayRaft>) {
         self.raft = Some(raft);
     }
 
     /// The raft group, when running in replica/HA mode.
-    pub fn raft(&self) -> Option<Arc<crate::raft::RelayRaft>> {
+    pub fn raft(&self) -> Option<Arc<crate::cluster::raft::RelayRaft>> {
         self.raft.clone()
     }
 
@@ -189,7 +189,10 @@ pub fn router_with_admission(
         // RelayWorkConsumer) is still a supported, tested deployment; (3) the
         // engine lease/ack/release substrate they wrap is shared with /consume and
         // stays regardless. New consumers must use /consume.
-        .route("/v1/{subject}/consume", post(crate::consume::consume))
+        .route(
+            "/v1/{subject}/consume",
+            post(crate::transport::consume::consume),
+        )
         .route("/v1/{subject}/lease", post(lease)) // DEPRECATED → use /consume
         .route("/v1/{subject}/ack", post(ack)) // DEPRECATED → use /consume
         .route("/v1/{subject}/lease-batch", post(lease_batch)) // DEPRECATED → /consume
@@ -212,7 +215,10 @@ pub fn router_with_admission(
         // matched data-plane routes, and MatchedPath is populated. Added
         // after (= outside) the auth layer so rejected requests are still
         // counted.
-        .route_layer(from_fn_with_state(req_metrics, crate::metrics::track))
+        .route_layer(from_fn_with_state(
+            req_metrics,
+            crate::transport::metrics::track,
+        ))
         .with_state(state.clone())
         // Data-plane-only request body cap (#2556); probes below stay
         // unbounded, matching `service_http`'s documented probe behavior.
@@ -255,8 +261,11 @@ pub fn router_with_admission(
     // `/readyz` reports 503 while draining.
     let probe_state = Arc::new(state);
     let metrics: Arc<dyn MetricsProvider> = probe_state.clone();
-    let probes =
-        service_http::standard_probe_routes(probe_state, Some(metrics), crate::openapi::openapi);
+    let probes = service_http::standard_probe_routes(
+        probe_state,
+        Some(metrics),
+        crate::transport::openapi::openapi,
+    );
 
     // relay is single-tenant per deployment (tenancy = k8s namespace); no
     // app-level namespace rewrite. Run one relay per tenant for isolation.
@@ -323,7 +332,7 @@ pub async fn publish(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(deny) = crate::auth::authorize(&principal, &subject, Role::Write) {
+    if let Err(deny) = crate::transport::auth::authorize(&principal, &subject, Role::Write) {
         return deny.into_response();
     }
     let cbor = wants_cbor(&headers);
@@ -342,7 +351,7 @@ pub async fn publish(
     // proposes locally on the leader or forwards to the leader, and returns
     // once THIS node's engine applied it (read-your-write).
     if let Some(raft) = st.raft() {
-        let cmd = crate::raft::PubCommand {
+        let cmd = crate::cluster::raft::PubCommand {
             subject,
             message_id: req.message_id,
             payload: req.payload,
@@ -379,9 +388,9 @@ pub async fn publish(
 /// leader / apply timeout) maps to 503.
 async fn propose_publish(
     _st: &AppState,
-    raft: &crate::raft::RelayRaft,
-    cmd: crate::raft::PubCommand,
-) -> Result<crate::types::AppendOutcome, Response> {
+    raft: &crate::cluster::raft::RelayRaft,
+    cmd: crate::cluster::raft::PubCommand,
+) -> Result<crate::broker::types::AppendOutcome, Response> {
     match raft.publish(&cmd).await {
         Ok((_, Some(outcome))) => Ok(outcome),
         // A successful proposal is read-your-write on this replica, so its
@@ -416,7 +425,7 @@ pub async fn publish_batch(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(deny) = crate::auth::authorize(&principal, &subject, Role::Write) {
+    if let Err(deny) = crate::transport::auth::authorize(&principal, &subject, Role::Write) {
         return deny.into_response();
     }
     let cbor = wants_cbor(&headers);
@@ -431,7 +440,7 @@ pub async fn publish_batch(
         let commands = req
             .messages
             .into_iter()
-            .map(|m| crate::raft::PubCommand {
+            .map(|m| crate::cluster::raft::PubCommand {
                 subject: subject.clone(),
                 message_id: m.message_id,
                 payload: m.payload,
@@ -479,7 +488,7 @@ pub async fn lease(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(deny) = crate::auth::authorize(&principal, &subject, Role::Read) {
+    if let Err(deny) = crate::transport::auth::authorize(&principal, &subject, Role::Read) {
         return deny.into_response();
     }
     let cbor = wants_cbor(&headers);
@@ -527,7 +536,7 @@ pub async fn ack(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(deny) = crate::auth::authorize(&principal, &subject, Role::Read) {
+    if let Err(deny) = crate::transport::auth::authorize(&principal, &subject, Role::Read) {
         return deny.into_response();
     }
     let cbor = wants_cbor(&headers);
@@ -595,7 +604,7 @@ pub async fn lease_batch(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(deny) = crate::auth::authorize(&principal, &subject, Role::Read) {
+    if let Err(deny) = crate::transport::auth::authorize(&principal, &subject, Role::Read) {
         return deny.into_response();
     }
     let cbor = wants_cbor(&headers);
@@ -641,7 +650,7 @@ pub async fn ack_batch(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(deny) = crate::auth::authorize(&principal, &subject, Role::Read) {
+    if let Err(deny) = crate::transport::auth::authorize(&principal, &subject, Role::Read) {
         return deny.into_response();
     }
     let cbor = wants_cbor(&headers);
@@ -705,7 +714,7 @@ pub async fn heartbeat(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(deny) = crate::auth::authorize(&principal, &subject, Role::Read) {
+    if let Err(deny) = crate::transport::auth::authorize(&principal, &subject, Role::Read) {
         return deny.into_response();
     }
     let cbor = wants_cbor(&headers);
@@ -746,8 +755,8 @@ pub async fn heartbeat(
 
 /// `GET /admin/backup` — a consistent snapshot of the live (un-acked) engine
 /// state for backup runners (#1209): the EXACT bytes
-/// [`crate::raft::RelayStateMachine`]'s raft snapshot produces
-/// ([`crate::raft::snapshot_bytes`] — `dump_live` + the applied index; 0 on a
+/// [`crate::cluster::raft::RelayStateMachine`]'s raft snapshot produces
+/// ([`crate::cluster::raft::snapshot_bytes`] — `dump_live` + the applied index; 0 on a
 /// raft-less single node). A cluster-wide admin op: requires `admin` on `*`
 /// when auth is required (lumen's guard). Restore = feed the bytes to
 /// `raft::load_snapshot_bytes` on a fresh node (exact state replacement).
@@ -760,14 +769,14 @@ pub async fn admin_backup(
     State(st): State<AppState>,
     Extension(principal): Extension<AuditedRoleMapPrincipal>,
 ) -> Response {
-    if let Err(deny) = crate::auth::authorize(&principal, "*", Role::Admin) {
+    if let Err(deny) = crate::transport::auth::authorize(&principal, "*", Role::Admin) {
         return deny.into_response();
     }
     let applied = match st.raft() {
         Some(raft) => raft.applied_index(),
         None => 0,
     };
-    match crate::raft::snapshot_bytes(&st.relay, applied) {
+    match crate::cluster::raft::snapshot_bytes(&st.relay, applied) {
         Ok(bytes) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/json")],
@@ -791,7 +800,7 @@ pub async fn log_len(
     Extension(principal): Extension<AuditedRoleMapPrincipal>,
     Path(subject): Path<String>,
 ) -> Response {
-    if let Err(deny) = crate::auth::authorize(&principal, &subject, Role::Read) {
+    if let Err(deny) = crate::transport::auth::authorize(&principal, &subject, Role::Read) {
         return deny.into_response();
     }
     match st.relay.log_len(&subject) {

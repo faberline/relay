@@ -155,22 +155,22 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: src/engine.rs
+  - path: src/broker/engine.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Add Relay::reconcile(now): sweep every subject/shard's expired leases (frontier-only) and return the count reclaimed; also promote_due per shard (release delayed/ETA entries that came due) and wake those subjects. Add publish_at(.., not_before, ..) that durably appends then register_delayed for a future-dated entry; publish delegates with None. Recovery (shard_state) rebuilds the in-memory delay index by scanning the un-acked tail for not_before."
-  - path: src/workqueue.rs
+  - path: src/broker/workqueue.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Delay index: delayed min-heap (by visible-at millis) + delayed_set; register_delayed(seq, visible_at) holds an entry back; promote_due(now) releases due entries onto the redeliver heap (returns count); pick skips delayed seqs; lease/lease_or_dead call promote_due(now) first. reclaim_expired re-offers via register_delayed with exponential backoff (redeliver_backoff_ms * 2^(attempt-1), capped) unless backoff=0 or the entry is exhausted (then immediate); WorkQueue::new gains redeliver_backoff_ms."
-  - path: src/types.rs
+  - path: src/broker/types.rs
     action: modify
     section: schema
     impl_mode: hand-written
     reason: "LogEntry gains optional not_before (work-queue visibility gate; serde default = back-compatible with existing segments)."
-  - path: src/wire.rs
+  - path: src/transport/wire.rs
     action: modify
     section: schema
     impl_mode: hand-written
@@ -185,17 +185,17 @@ changes:
     section: unit-test
     impl_mode: hand-written
     reason: "Add redelivery_backoff_is_exponential: a reclaimed lease is withheld for the backoff window and re-leases only after it, doubling per attempt. Existing redeliver tests pin redeliver_backoff_ms=0."
-  - path: src/reconciler.rs
+  - path: src/cluster/reconciler.rs
     action: create
     section: logic
     impl_mode: hand-written
     reason: "Background reconciler: spawn_reconciler(relay, interval) ticks and calls reconcile; ReconcilerHandle to stop it."
-  - path: src/server.rs
+  - path: src/transport/server.rs
     action: modify
     section: logic
     impl_mode: hand-written
     reason: "Expose AppState::relay_handle() so the server can hand the shared core to the reconciler."
-  - path: src/server_config.rs
+  - path: src/transport/server_config.rs
     action: modify
     section: config
     impl_mode: hand-written

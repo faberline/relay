@@ -2,7 +2,7 @@
 //! relay HTTP request observability: per-op request counts + latency, rendered
 //! into the Prometheus exposition served at `/metrics`.
 //!
-//! Built on the shared `libs/metrics-prometheus` primitives (`Latency` — a
+//! Built on the shared `core/metrics-prometheus` primitives (`Latency` — a
 //! lock-free `sum`/`count` counter pair — plus the text-format encoder
 //! [`metrics_prometheus::render`]); this module owns only relay's metric names
 //! and the route → op mapping. Recording happens in [`track`], a

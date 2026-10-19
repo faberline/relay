@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::types::{default_priority, AppendOutcome, Lease, LogEntry, Payload, Seq};
+use crate::broker::types::{default_priority, AppendOutcome, Lease, LogEntry, Payload, Seq};
 
 /// Publish one message to the path's subject.
 #[derive(Debug, Clone, Serialize, Deserialize)]

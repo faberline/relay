@@ -27,7 +27,7 @@ summary: >
   scripts/kind-failover-smoke.sh is rewritten against the single relay image
   with auto-mode env (zero relay-raft references). A private rustls-provider
   feature installs the process-level rustls crypto provider at startup
-  (src/tls.rs; enabled by operator/self-update/issue — keep's pattern).
+  (src/tls/mod.rs; enabled by operator/self-update/issue — keep's pattern).
 fill_sections: [logic, unit-test, changes]
 ---
 
@@ -235,7 +235,7 @@ changes:
     section: logic
     impl_mode: hand-written
     description: "impl ManagedService for Relay: MANAGER relay-operator (SSA field manager + leader-election Lease name); render() -> render::render; readiness_targets = [StatefulSet {name}]; status_patch = Pending|Reconciling|Ready from readyReplicas vs desiredReplicas (= replicasPerShard, shard pinned 1) + observedGeneration + message; pub async fn run() = service_k8s::run::<Relay>()."
-  - path: src/tls.rs
+  - path: src/tls/mod.rs
     action: create
     section: logic
     impl_mode: hand-written
@@ -245,12 +245,12 @@ changes:
     section: logic
     impl_mode: hand-written
     description: "Wire the new modules in the existing HANDWRITE region: pub mod tls; #[cfg(feature = \"operator\")] pub mod operator;."
-  - path: src/bin/relay.rs
+  - path: src/bin/relay/main.rs
     action: modify
     section: logic
     impl_mode: hand-written
     description: "Add Command::K8s + Command::Dockerfile arms (keep's shapes): k8s crd render [--out], k8s operator render [--namespace relay-system] [--out], k8s operator run (feature-gated; bail with rebuild hint otherwise), k8s instance render --profile dev|staging|prod|template [--name] [--namespace] [--image] [--out] (string-templated Relay CR YAML), dockerfile render --variant source|release [--version] [--out] (include_str fixtures, marker strip, relay@version substitution); write_or_print --out handling (directory receives the default filename); call relay::tls::install_default_crypto_provider() first in main; extend the cli_parse_surface test with the new verbs."
-  - path: src/llm.rs
+  - path: src/bin/relay/llm.rs
     action: modify
     section: logic
     impl_mode: hand-written

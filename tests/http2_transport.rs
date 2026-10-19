@@ -13,9 +13,9 @@ use std::net::SocketAddr;
 
 use serde_json::json;
 
-use relay::server::{router, AppState};
-use relay::server_config::RelayServerConfig;
-use relay::wire::{
+use relay::transport::server::{router, AppState};
+use relay::transport::server_config::RelayServerConfig;
+use relay::transport::wire::{
     from_cbor, to_cbor, AckResponse, LeaseRequest, LeaseResponse, PublishRequest, CBOR,
 };
 use relay::{AppendOutcome, DEFAULT_PRIORITY};
@@ -252,7 +252,7 @@ async fn readyz_flips_to_503_on_drain() {
     assert_eq!(draining.text().await.unwrap(), "draining");
 }
 
-/// #1205 AC2: an HTTP/2 prior-knowledge (h2c, via libs/transport-h2c `h2c_client`)
+/// #1205 AC2: an HTTP/2 prior-knowledge (h2c, via core/transport-h2c `h2c_client`)
 /// request AND an HTTP/1.1 request both succeed on the same serve port.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn h2c_and_http11_share_the_serve_port() {

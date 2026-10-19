@@ -11,7 +11,7 @@
 //!
 //! The PEM loading, the rustls server/client config builders, and the
 //! Once-guarded crypto-provider install are generic across every service with
-//! a peer/replication port and live in `libs/peer-tls` (#971); this module
+//! a peer/replication port and live in `core/peer-tls` (#971); this module
 //! is the thin adapter that pins relay's `RELAY_PEER_TLS_*` /
 //! `RELAY_PEER_MTLS` env names (lumen's `src/tls.rs` pattern).
 //!

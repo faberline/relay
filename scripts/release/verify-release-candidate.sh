@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# Verify only a run-scoped release candidate of one shared-script app (sift,
-# keep, relay, defer). This script never creates a Git tag, GitHub Release,
-# semver/latest image tag, signature, or attestation. tape keeps its own
-# copies under apps/tape/scripts; the per-app facts here come from
-# scripts/release/apps.sh.
+# Verify only a run-scoped release candidate of relay. This script never
+# creates a Git tag, GitHub Release, semver/latest image tag, signature, or
+# attestation. The per-app facts here come from scripts/release/apps.sh.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/release/apps.sh
@@ -11,7 +9,7 @@ source "$SCRIPT_DIR/apps.sh"
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: verify-release-candidate.sh --app <sift|keep|relay|defer> \
+Usage: verify-release-candidate.sh --app relay \
   --repo <owner/repo> --version <semver> --commit <40-hex> \
   --run-id <id> --run-attempt <attempt> \
   --manifest <path> --manifest-sidecar <path> --artifacts-dir <directory> \

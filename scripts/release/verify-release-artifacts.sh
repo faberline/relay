@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Verify a promotion of one shared-script app (sift, keep, relay, defer). This
-# script never creates or changes a tag, image, release, signature,
-# provenance, or attestation. tape keeps its own copies under
-# apps/tape/scripts; the per-app facts here come from scripts/release/apps.sh.
+# Verify a promotion of relay. This script never creates or changes a tag,
+# image, release, signature, provenance, or attestation. The per-app facts
+# here come from scripts/release/apps.sh.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/release/apps.sh
@@ -10,7 +9,7 @@ source "$SCRIPT_DIR/apps.sh"
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: verify-release-artifacts.sh --app <sift|keep|relay|defer> \
+Usage: verify-release-artifacts.sh --app relay \
      --repo <owner/repo> --tag <app@semver> --commit <40-hex> \
      --candidate-run-id <id> --candidate-run-attempt <attempt> \
      --mode <candidate|fixture|public> \

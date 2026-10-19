@@ -1,7 +1,7 @@
 // HANDWRITE-BEGIN gap="missing-generator:logic:dc1ec053" tracker="pending-tracker" reason="impl ManagedService for Relay: MANAGER relay-operator (SSA field manager + leader-election Lease name); render() -> render::render; readiness_targets = [StatefulSet {name}]; status_patch = Pending|Reconciling|Ready from readyReplicas vs desiredReplicas (= replicasPerShard, shard pinned 1) + observedGeneration + message; pub async fn run() = service_k8s::run::<Relay>()."
-//! relay's operator wiring onto the shared `libs/service-k8s` controller.
+//! relay's operator wiring onto the shared `core/service-k8s` controller.
 //!
-//! The reconcile loop + leader-election lease live in `libs/service-k8s`
+//! The reconcile loop + leader-election lease live in `core/service-k8s`
 //! (`service_k8s::run` drives the watch + leader-gated server-side apply over
 //! kube-rs). relay supplies only its [`ManagedService`] impl — what to render,
 //! which workload to poll for readiness, and the `Relay` status subresource to
@@ -55,7 +55,7 @@ impl ManagedService for Relay {
 }
 
 /// `relay k8s operator run` — run the reconcile controller on the shared
-/// `libs/service-k8s` host (leader-gated; safe at `replicas > 1`).
+/// `core/service-k8s` host (leader-gated; safe at `replicas > 1`).
 pub async fn run() -> anyhow::Result<()> {
     service_k8s::run::<Relay>().await
 }

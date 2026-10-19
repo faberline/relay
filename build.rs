@@ -2,7 +2,7 @@
 //! Build script: stamp `RELAY_GIT_SHA`, `RELAY_BUILT_AT`, and `RELAY_TARGET`
 //! into the binary so the standard CLI ops (`upgrade` picks the matching
 //! release asset; `issue` reports provenance) work without a server. The
-//! stamping logic lives in the shared `libs/build-stamp` crate; this file
+//! stamping logic lives in the shared `core/build-stamp` crate; this file
 //! only supplies relay's `RELAY` env-var prefix.
 
 fn main() {

@@ -156,11 +156,6 @@ echo "conclusion: $conclusion"
 out=${out:-${TMPDIR:-/tmp}/${app}-release-${version}}
 mkdir -p "$out"
 verifier="$(release_app_scripts_dir "$app")/verify-release-artifacts.sh"
-case "$app" in
-  tape)
-    next="$verifier --repo $RELEASE_REPO --tag $tag --commit $commit --candidate-run-id $run_id --candidate-run-attempt $attempt --mode public --gke-receipt $receipt --gke-receipt-sidecar $sidecar --output $out/public-contract.json" ;;
-  *)
-    next="$verifier --app $app --repo $RELEASE_REPO --tag $tag --commit $commit --candidate-run-id $run_id --candidate-run-attempt $attempt --mode public --gke-receipt $receipt --gke-receipt-sidecar $sidecar --output $out/public-contract.json" ;;
-esac
+next="$verifier --app $app --repo $RELEASE_REPO --tag $tag --commit $commit --candidate-run-id $run_id --candidate-run-attempt $attempt --mode public --gke-receipt $receipt --gke-receipt-sidecar $sidecar --output $out/public-contract.json"
 echo "next: $next"
 [ "$conclusion" = success ] || exit 1

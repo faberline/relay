@@ -1,10 +1,10 @@
-// HANDWRITE-BEGIN gap="missing-generator:unit-test:a8a111d3" tracker="pending-tracker" reason="Live-node integration over the http2_transport.rs harness (service_http::serve on 127.0.0.1:0): /admin/backup returns parseable EngineSnapshot bytes carrying a published un-acked message; the artifact round-trips through load_snapshot_bytes on a FRESH engine and the message leases back with the original payload (idempotent merge re-load asserted); with auth required the endpoint 401s tokenless, 403s a non-admin token, 200s an admin-on-* token; cfg(feature = backup): relay::backup::run_backup ships the snapshot to a file:// sink (BackupRunResult + artifact on disk) and prunes by retention."
+// HANDWRITE-BEGIN gap="missing-generator:unit-test:a8a111d3" tracker="pending-tracker" reason="Live-node integration over the http2_transport.rs harness (service_http::serve on 127.0.0.1:0): /admin/backup returns parseable EngineSnapshot bytes carrying a published un-acked message; the artifact round-trips through load_snapshot_bytes on a FRESH engine and the message leases back with the original payload (idempotent merge re-load asserted); with auth required the endpoint 401s tokenless, 403s a non-admin token, 200s an admin-on-* token; cfg(feature = backup): relay::cluster::backup::run_backup ships the snapshot to a file:// sink (BackupRunResult + artifact on disk) and prunes by retention."
 //! Backup surface over a LIVE node (WI #1209): `GET /admin/backup` returns
 //! the exact `RelayStateMachine::snapshot` bytes (`EngineSnapshot` =
 //! `dump_live` + applied index), the artifact round-trips through the
 //! exact `load_live` state replacement on a fresh engine, the endpoint is admin-guarded when
-//! auth is required, and — with `--features backup` — `relay::backup` ships
-//! the bytes to a `libs/service-backup` `file://` sink with age retention.
+//! auth is required, and — with `--features backup` — `relay::cluster::backup` ships
+//! the bytes to a `core/service-backup` `file://` sink with age retention.
 //!
 //! Harness: the shared service shell's serve loop on an ephemeral loopback
 //! port (the `http2_transport.rs` pattern), driven with plain reqwest.
@@ -15,8 +15,8 @@ use std::net::SocketAddr;
 use chrono::Utc;
 use serde_json::json;
 
-use relay::server::{router, AppState};
-use relay::server_config::RelayServerConfig;
+use relay::transport::server::{router, AppState};
+use relay::transport::server_config::RelayServerConfig;
 use relay::{Relay, RelayCoreConfig};
 
 async fn start_server_with_state(state: AppState) -> SocketAddr {
@@ -186,7 +186,8 @@ async fn admin_backup_requires_admin_when_auth_required() {
         "reader-token": { "subject": "worker", "roles": { "*": "read" } },
     })
     .to_string();
-    let auth = relay::auth::AuthConfig::resolve("required", None, Some(&tokens)).unwrap();
+    let auth =
+        relay::transport::auth::AuthConfig::resolve("required", None, Some(&tokens)).unwrap();
     let state = AppState::with_auth(RelayServerConfig::ephemeral(), auth, 8 * 1024 * 1024);
     let addr = start_server_with_state(state).await;
 
@@ -257,7 +258,7 @@ async fn run_backup_ships_snapshot_to_local_sink() {
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
     let dest = BackupDestination::from_uri(&format!("file://{}", dir.path().display())).unwrap();
-    let result = relay::backup::run_backup(
+    let result = relay::cluster::backup::run_backup(
         &format!("http://{addr}"),
         None,
         &dest,

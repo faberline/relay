@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::RelayCoreConfig;
+use crate::broker::config::RelayCoreConfig;
 
 /// Settings for the HTTP/2 (h2c) transport in front of the relay core.
 ///

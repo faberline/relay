@@ -1,21 +1,21 @@
 // HANDWRITE-BEGIN gap="missing-generator:logic:655920c0" tracker="pending-tracker" reason="relay's service-auth adapter: AuthConfig (RELAY_AUTH off|disabled|required mode parse + token-registry load via service_auth::load_registry with startup fail-fast naming RELAY_TOKEN_REGISTRY_FILE), StaticRoleMapVerifier construction (registry when required, open() when off), and the per-handler-group authorize(principal, subject, needed) helper mapping RoleMapDenied to the shared 403 forbidden shape."
-//! relay's adoption of the shared `libs/service-auth` bearer contract (#1206).
+//! relay's adoption of the shared `core/service-auth` bearer contract (#1206).
 //!
 //! CONTRIBUTING § "Service auth — one Bearer-token contract": every
-//! long-running service authenticates through `libs/service-auth`. relay uses
+//! long-running service authenticates through `core/service-auth`. relay uses
 //! the standard registry verifier —
 //! `service_auth::role_map::StaticRoleMapVerifier` — implementing the
 //! archetype's `RELAY_AUTH=off|required` + `RELAY_TOKEN_REGISTRY_FILE` shape.
 //! relay's auth is **all-or-nothing per deployment** (unlike keep's optional,
 //! per-handler claim-check), so the blanket `service_auth::auth_middleware`
-//! composes directly on the `/v1` data-plane router in [`crate::server`];
+//! composes directly on the `/v1` data-plane router in [`crate::transport::server`];
 //! the probe surface (`/healthz` `/readyz` `/metrics` `/openapi.json`
 //! `/docs`) never gets the layer and stays tokenless.
 //!
 //! This file owns relay's env/flag wiring and the per-handler-group
 //! authorization policy. The role hierarchy, the wildcard `*` grant, the
 //! registry-file loader, and the shared 401/403 `{error, message}` shape all
-//! live in `libs/service-auth`.
+//! live in `core/service-auth`.
 //!
 //! ## Configuration
 //!

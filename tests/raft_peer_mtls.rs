@@ -29,7 +29,7 @@ fn authority() -> Authority {
 
 struct Material {
     _dir: tempfile::TempDir,
-    config: relay::peer_tls::PeerTlsConfig,
+    config: relay::tls::peer::PeerTlsConfig,
 }
 
 fn material(ca: &Authority) -> Material {
@@ -58,7 +58,7 @@ fn material_with_trust(identity_ca: &Authority, trust_ca: &Authority) -> Materia
     std::fs::write(&ca_path, trust_ca.cert.pem()).unwrap();
     Material {
         _dir: dir,
-        config: relay::peer_tls::PeerTlsConfig {
+        config: relay::tls::peer::PeerTlsConfig {
             cert: cert_path,
             key: key_path,
             ca: ca_path,
