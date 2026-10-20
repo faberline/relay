@@ -1,10 +1,10 @@
-// HANDWRITE-BEGIN gap="missing-generator:unit-test:22fdd793" tracker="pending-tracker" reason="Offline deploy-CLI tests driving the COMPILED relay binary in the default build: every k8s/dockerfile render verb succeeds and round-trips serde_yaml; dockerfile source/release outputs equal the committed fixtures (+ --version substitution); the CRD render is structural-schema safe (no uint32/uint64, minimum floor, kind Relay); operator run without the feature exits nonzero with the rebuild hint; the smoke script has no relay-raft refs and its heredoc manifests parse and carry the auto-mode env; the llm operations topic names the deploy verbs."
+// HANDWRITE-BEGIN gap="missing-generator:unit-test:22fdd793" tracker="pending-tracker" reason="Offline deploy-CLI tests driving the COMPILED relay binary in the default build: every k8s/dockerfile render verb succeeds and round-trips serde_yaml; dockerfile source/release outputs equal the committed fixtures (+ --version substitution); the CRD render is structural-schema safe (no uint32/uint64, minimum floor, kind Relay); operator run without the feature exits nonzero with the rebuild hint; the GKE test overlay runs the auto-mode env as three voters; the llm operations topic names the deploy verbs."
 //! Offline deploy-CLI surface driven against the COMPILED `relay` binary in
 //! the DEFAULT (kube-free) build (WI #1208): every `relay k8s ... render` and
 //! `relay dockerfile render` verb succeeds offline and emits parseable
 //! YAML/Dockerfiles; the committed Dockerfile fixtures are reproduced
 //! byte-for-byte (keep #777 pattern); the CRD render is structural-schema
-//! safe; the kind failover smoke script is single-bin auto-mode; and the llm
+//! safe; the GKE test overlay is three-voter auto-mode; and the llm
 //! operations topic names the deploy verbs. No server, no network.
 
 use std::process::Command;
@@ -195,72 +195,64 @@ fn crd_render_is_structural_schema_safe() {
     );
 }
 
-/// R6: the kind failover smoke script drives the single `relay` auto-mode
-/// image — zero relay-raft references, `bash -n` clean, and its embedded
-/// manifests parse as YAML and carry the standard downward-API env on 7000.
+/// R6: the GKE test overlay (k8s/overlays/gke-test, the cluster of the
+/// `raft_failover` e2e suite) runs the single `relay` auto-mode image as three
+/// voters: the base StatefulSet carries the standard downward-API env and the
+/// peer service on 7000, and the overlay raises it to three replicas and
+/// voters, leaving the image under test for the workflow to pin.
 #[test]
-fn smoke_script_is_single_bin_auto_mode() {
-    let script = include_str!("../scripts/kind-failover-smoke.sh");
-    assert!(
-        !script.contains("relay-raft"),
-        "smoke script must not reference the deleted relay-raft bin"
+fn gke_test_overlay_is_three_voter_auto_mode() {
+    let base = parse_yaml_docs(
+        "base statefulset",
+        include_str!("../k8s/base/statefulset.yaml"),
     );
-
-    // bash -n: syntax-only check of the script.
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/scripts/kind-failover-smoke.sh"
+    let config = parse_yaml_docs("base configmap", include_str!("../k8s/base/configmap.yaml"));
+    let patch = parse_yaml_docs(
+        "gke-test statefulset patch",
+        include_str!("../k8s/overlays/gke-test/statefulset-patch.yaml"),
     );
-    let out = Command::new("bash")
-        .args(["-n", path])
-        .output()
-        .expect("run bash -n");
-    assert!(
-        out.status.success(),
-        "bash -n rejected the smoke script: {}",
-        String::from_utf8_lossy(&out.stderr)
+    let overlay = parse_yaml_docs(
+        "gke-test kustomization",
+        include_str!("../k8s/overlays/gke-test/kustomization.yaml"),
     );
-
-    // Extract the quoted heredoc manifests and parse them as YAML.
-    let start = script
-        .find("<<'MANIFESTS'")
-        .expect("smoke script carries a MANIFESTS heredoc");
-    let body_start = script[start..].find('\n').unwrap() + start + 1;
-    let end = script[body_start..]
-        .find("\nMANIFESTS")
-        .expect("heredoc terminator")
-        + body_start;
-    let manifests = &script[body_start..end];
-    let docs = parse_yaml_docs("smoke manifests", manifests);
-    let sts = docs
-        .iter()
-        .find(|d| d["kind"] == "StatefulSet")
-        .expect("smoke manifests carry a StatefulSet");
-
-    // The auto-mode contract: the standard downward-API quartet + peer
-    // service on the serve port; the single `relay` image.
-    let env = sts["spec"]["template"]["spec"]["containers"][0]["env"]
-        .as_sequence()
-        .expect("env sequence");
-    let get = |k: &str| {
-        env.iter()
+    let env = |sts: &serde_yaml::Value, k: &str| {
+        sts["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_sequence()
+            .expect("env sequence")
+            .iter()
             .find(|e| e["name"] == k)
-            .unwrap_or_else(|| panic!("smoke StatefulSet missing env {k}"))
+            .cloned()
+            .unwrap_or_else(|| panic!("StatefulSet missing env {k}"))
     };
-    assert_eq!(get("SHARD_COUNT")["value"], "1");
-    assert_eq!(get("REPLICAS_PER_SHARD")["value"], "3");
-    assert_eq!(get("VOTER_COUNT")["value"], "3");
+
+    // The auto-mode contract from the base: the downward-API pod name, one
+    // shard, the peer service, and the serve port 7000.
+    let base = &base[0];
+    assert_eq!(env(base, "SHARD_COUNT")["value"], "1");
     assert_eq!(
-        get("POD_NAME")["valueFrom"]["fieldRef"]["fieldPath"],
+        env(base, "POD_NAME")["valueFrom"]["fieldRef"]["fieldPath"],
         "metadata.name"
     );
-    get("RELAY_PEER_SERVICE");
-    assert_eq!(get("RELAY_BIND")["value"], "0.0.0.0:7000");
-    assert_eq!(sts["spec"]["replicas"], serde_yaml::Value::from(3));
+    assert_eq!(env(base, "RELAY_PEER_SERVICE")["value"], "relay-headless");
     assert_eq!(
-        sts["spec"]["template"]["spec"]["containers"][0]["image"],
-        "relay:dev"
+        env(base, "RELAY_BIND")["valueFrom"]["configMapKeyRef"]["key"],
+        "RELAY_BIND"
     );
+    assert_eq!(config[0]["data"]["RELAY_BIND"], "0.0.0.0:7000");
+
+    // The overlay: three replicas and three voters of the one `relay` image.
+    let patch = &patch[0];
+    assert_eq!(patch["spec"]["replicas"], serde_yaml::Value::from(3));
+    assert_eq!(env(patch, "REPLICAS_PER_SHARD")["value"], "3");
+    assert_eq!(env(patch, "VOTER_COUNT")["value"], "3");
+    assert_eq!(
+        patch["spec"]["template"]["spec"]["containers"][0]["image"],
+        "ghcr.io/faberline/relay"
+    );
+    let overlay = &overlay[0];
+    assert_eq!(overlay["resources"][0], "../../base");
+    assert_eq!(overlay["images"][0]["name"], "ghcr.io/faberline/relay");
+    assert_eq!(overlay["images"][0]["newTag"], "REPLACE_ME");
 }
 
 /// R7: the llm operations topic documents the deploy verbs so the outline

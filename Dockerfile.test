@@ -1,0 +1,25 @@
+# syntax=docker/dockerfile:1
+# The GKE test Job's image for relay (faberline/aw docs/standards/rust-tests.md)
+# — NEVER user-facing. Target `test-client`: the `it` test binary, built for
+# x86_64-unknown-linux-musl by `.github/workflows/gke-test.yml`, as
+# /usr/local/bin/relay-it, plus kubectl for the suites' cluster steps. The
+# workflow stages the binary at
+#   dist/linux/amd64/relay-it
+# and pushes ghcr.io/<owner>/relay-test-client:sha-<git12>. This file compiles
+# nothing; the server image under test stays the from-source Dockerfile.
+#
+#   docker buildx build -f Dockerfile.test --target test-client \
+#     --platform linux/amd64 \
+#     -t ghcr.io/<owner>/relay-test-client:sha-<git12> --push .
+
+# kubectl for the test client: the upstream static binary, pinned to the
+# multi-arch index.
+FROM registry.k8s.io/kubectl:v1.33.4@sha256:261a9ed843eb68e3d50da132245e2221d75ca19504130e47bd32788c0ff339a0 AS kubectl
+
+# static-debian12 ships no glibc, so this only works with the fully static
+# musl test binary. :nonroot = uid 65532.
+FROM gcr.io/distroless/static-debian12:nonroot AS test-client
+ARG TARGETARCH=amd64
+COPY --from=kubectl /bin/kubectl /usr/local/bin/kubectl
+COPY --chown=65532:65532 dist/linux/${TARGETARCH}/relay-it /usr/local/bin/relay-it
+ENTRYPOINT ["/usr/local/bin/relay-it"]

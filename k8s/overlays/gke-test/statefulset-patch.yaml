@@ -1,0 +1,42 @@
+# Three voters on pool-relay-server, one per node, sized for e2-standard-2.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: relay
+  namespace: relay
+spec:
+  replicas: 3
+  template:
+    spec:
+      nodeSelector:
+        faberline.dev/pool: relay-server
+      tolerations:
+        - key: faberline.dev/pool
+          operator: Equal
+          value: relay-server
+          effect: NoSchedule
+      imagePullSecrets:
+        - name: ghcr-pull
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels: {app: relay, role: server}
+      containers:
+        - name: relay
+          # The base's relay:<version> is a local name; the images entry in
+          # kustomization.yaml pins this one to the image under test.
+          image: ghcr.io/faberline/relay
+          env:
+            - {name: REPLICAS_PER_SHARD, value: "3"}
+            - {name: VOTER_COUNT, value: "3"}
+          # Requests and no limits: each voter has its node to itself.
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests: {storage: 1Gi}

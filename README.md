@@ -60,11 +60,11 @@ A raft-backed HA path on the shared `core/raft-runtime` driver: the leader owns
 writes, followers replicate committed state, and failover preserves the
 ordered-log and work-queue API contract. It converges in process, persists hard
 state and the applied-index floor, serves through real h2c nodes, and is
-dogfooded through a Kubernetes kind failover smoke. Auto-mode takes no flags —
+dogfooded through a three-voter leader-kill suite on the GKE test cluster. Auto-mode takes no flags —
 downward-API env (`REPLICAS_PER_SHARD` > 1) flips replica mode.
 
 - Gate: `cargo test -p relay --test raft_core --test raft_persistence --test raft_cluster`
-- Dogfood: `scripts/kind-failover-smoke.sh`
+- Dogfood: `tests/it/e2e/raft_failover.rs` on `k8s/overlays/gke-test` (`.github/workflows/gke-test.yml`)
 - Source: `src/cluster/raft.rs`, [`docs/ha.md`](docs/ha.md)
 
 ### Interface
@@ -127,10 +127,10 @@ and admin verbs (`--out`, `relay backup`, `relay issue …`,
 
 An operator-rendered StatefulSet with downward-API env auto-mode reads, offline
 CRD/operator/instance/dockerfile render verbs whose committed files are
-byte-equal fixtures, and a kind failover path for deployment dogfood.
+byte-equal fixtures, and a GKE test overlay for deployment dogfood.
 
 - Gate: `cargo test -p relay --test deploy_cli --test operator --test direct_k8s_assets --test raft_config`
-- Dogfood: `scripts/kind-failover-smoke.sh`
+- Dogfood: `k8s/overlays/gke-test` + `k8s/gke-test-job/raft_failover`
 - Assets: `k8s`
 
 #### Long-running stability

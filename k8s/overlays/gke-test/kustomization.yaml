@@ -1,0 +1,36 @@
+# relay on Faberline's shared GKE test cluster (faberline-test), for the
+# cluster e2e suites in tests/it/e2e/ (faberline/aw
+# docs/standards/test-cluster.md).
+#
+# faberline/aw's gke-test workflow renders this overlay, sets the image under
+# test with `kustomize edit set image ghcr.io/faberline/relay=<image>`, applies
+# it in the namespace `relay`, waits for the StatefulSet rollout, and runs one
+# suite's Job from k8s/gke-test-job/<suite>.
+#
+# What it deploys: the shipped base as three raft voters (SHARD_COUNT 1,
+# REPLICAS_PER_SHARD 3, VOTER_COUNT 3), one pod per node on pool-relay-server.
+# The pool has at most 3 nodes; a suite that deletes a pod gets it back on the
+# same node and zonal PVC. aw's infra/gke-test/pools.yaml owns the pools;
+# nothing here creates cloud resources.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: relay
+
+resources:
+  - ../../base
+
+patches:
+  - path: statefulset-patch.yaml
+  # The suites delete a voter on purpose; kubectl delete is not an eviction,
+  # but a node drain while the pool scales down must not wedge on
+  # maxUnavailable 0.
+  - target: {kind: PodDisruptionBudget, name: relay}
+    patch: |-
+      - {op: replace, path: /spec/maxUnavailable, value: 1}
+
+# The workflow replaces REPLACE_ME with the image under test. run.sh fails a
+# render that still has it.
+images:
+  - name: ghcr.io/faberline/relay
+    newTag: REPLACE_ME

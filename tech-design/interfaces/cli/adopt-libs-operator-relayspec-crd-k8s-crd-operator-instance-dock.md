@@ -24,8 +24,9 @@ summary: >
   install (no raft env; production HA goes through the operator CR path via
   instance render --profile prod), k8s/operator/ gains the crd/rbac/
   deployment fixtures, pdb.yaml is deleted, and
-  scripts/kind-failover-smoke.sh is rewritten against the single relay image
-  with auto-mode env (zero relay-raft references). A private rustls-provider
+  the three-voter failover proof runs the single relay image with auto-mode
+  env (zero relay-raft references) as the GKE raft_failover e2e suite on
+  k8s/overlays/gke-test (it replaced scripts/kind-failover-smoke.sh). A private rustls-provider
   feature installs the process-level rustls crypto provider at startup
   (src/tls/mod.rs; enabled by operator/self-update/issue — keep's pattern).
 fill_sections: [logic, unit-test, changes]
@@ -80,7 +81,7 @@ nodes:
     label: "k8s/ tree per the dogfood rules: base = SMALL direct install for kind/smoke — single-node StatefulSet (replicas 1, NO raft env: no REPLICAS_PER_SHARD/VOTER_COUNT — replica_mode() stays false; RELAY_BIND 0.0.0.0:7000, RELAY_DATA_DIR /data, 1Gi PVC, /readyz + /healthz probes) + service.yaml (headless for serviceName + ClusterIP client). pdb.yaml DELETED (a 1-replica PDB is noise; quorum PDBs come from the operator render). Production HA = apply crd render + operator render, then instance render --profile prod"
   smoke:
     kind: terminal
-    label: "scripts/kind-failover-smoke.sh rewritten: build the single linux `relay` bin (cached cargo container) -> thin relay:dev runtime image -> kind load -> apply INLINE heredoc manifests carrying the standard downward-API quartet (SHARD_COUNT 1, REPLICAS_PER_SHARD 3, VOTER_COUNT 3, POD_NAME fieldRef, RELAY_PEER_SERVICE) on port 7000 -> leader election / publish / kill-leader / no-committed-loss assertions via /raftz + /v1/events/publish. Zero relay-raft references; bash -n clean; the heredoc manifests are YAML-parsed by a test"
+    label: "GKE raft_failover e2e suite (tests/it/e2e/raft_failover.rs, replacing scripts/kind-failover-smoke.sh): k8s/overlays/gke-test deploys the single `relay` image as three voters carrying the standard downward-API quartet (SHARD_COUNT 1, REPLICAS_PER_SHARD 3, VOTER_COUNT 3, POD_NAME fieldRef, RELAY_PEER_SERVICE) on port 7000 -> leader election / publish / kill-leader / re-election / no-committed-loss assertions via /raftz + /v1/{subject}/publish. Zero relay-raft references; the overlay manifests are YAML-parsed by a test"
 edges:
   - { from: main, to: verb }
   - { from: verb, to: crd, label: "k8s crd render" }
@@ -175,10 +176,10 @@ requirements:
     verify: tests/operator.rs::rustls_provider_install_is_idempotent
   smoke_script_single_bin:
     id: R6
-    text: "scripts/kind-failover-smoke.sh contains zero relay-raft references, builds/loads the single `relay` image, and its embedded kubernetes manifests (extracted from the heredoc) parse as YAML and carry the auto-mode downward-API env (SHARD_COUNT=1, REPLICAS_PER_SHARD=3, VOTER_COUNT=3, POD_NAME fieldRef, RELAY_PEER_SERVICE) on port 7000; `bash -n` accepts the script."
+    text: "k8s/overlays/gke-test runs the single `relay` image (ghcr.io/faberline/relay, pinned by the gke-test workflow) as three replicas, and with the base StatefulSet its manifests parse as YAML and carry the auto-mode downward-API env (SHARD_COUNT=1, REPLICAS_PER_SHARD=3, VOTER_COUNT=3, POD_NAME fieldRef, RELAY_PEER_SERVICE) on port 7000."
     kind: regression
     risk: medium
-    verify: tests/deploy_cli.rs::smoke_script_is_single_bin_auto_mode
+    verify: tests/deploy_cli.rs::gke_test_overlay_is_three_voter_auto_mode
   statefulset_env_probe_contract:
     id: R2
     text: "With --features operator: render() of a Relay CR emits, via the shared service_k8s::render toolkit, a StatefulSet whose container env carries exactly the downward-API contract relay's serve reads — POD_NAME (fieldRef metadata.name), SHARD_COUNT pinned to 1, REPLICAS_PER_SHARD, VOTER_COUNT, RELAY_PEER_SERVICE={name}-headless — plus RELAY_BIND=0.0.0.0:7000, RELAY_DATA_DIR=/data and RELAY_GRACE_SECS; replicas == replicasPerShard (single group); readiness probe /readyz and liveness+startup probes /healthz on the http port; the ServiceAccount, headless + client Services and PDB are present; the /data PVC template carries the CR's storage size."
@@ -202,7 +203,7 @@ flowchart TD
     r3[R3 crd fixture matches generated] --> tests_deploy_cli_rs_crd_render_is_structural_schema_safe[tests/deploy_cli.rs::crd_render_is_structural_schema_safe]
     r4[R4 dockerfile fixture equality] --> tests_deploy_cli_rs_dockerfile_render_reproduces_committed_fixtures[tests/deploy_cli.rs::dockerfile_render_reproduces_committed_fixtures]
     r4[R4 offline render verbs default build] --> tests_deploy_cli_rs_render_verbs_emit_parseable_yaml_offline[tests/deploy_cli.rs::render_verbs_emit_parseable_yaml_offline]
-    r6[R6 smoke script single bin] --> tests_deploy_cli_rs_smoke_script_is_single_bin_auto_mode[tests/deploy_cli.rs::smoke_script_is_single_bin_auto_mode]
+    r6[R6 smoke script single bin] --> tests_deploy_cli_rs_gke_test_overlay_is_three_voter_auto_mode[tests/deploy_cli.rs::gke_test_overlay_is_three_voter_auto_mode]
     r7[R7 llm operations topic deploy verbs] --> tests_deploy_cli_rs_llm_operations_topic_names_deploy_verbs[tests/deploy_cli.rs::llm_operations_topic_names_deploy_verbs]
 ```
 ## Changes
@@ -291,10 +292,10 @@ changes:
     impl_mode: hand-written
     description: "A PodDisruptionBudget over a 1-replica base is noise; quorum PDBs for HA topologies come from the operator render (maxUnavailable 1)."
   - path: scripts/kind-failover-smoke.sh
-    action: modify
+    action: delete
     section: logic
     impl_mode: hand-written
-    description: "Rewritten against the single `relay` auto-mode image: build the linux relay bin in a cached cargo container, thin relay:dev runtime image, kind create + load, apply inline heredoc manifests (headless + client Service, 3-replica StatefulSet with POD_NAME fieldRef / SHARD_COUNT 1 / REPLICAS_PER_SHARD 3 / VOTER_COUNT 3 / RELAY_PEER_SERVICE, PDB maxUnavailable 1) on port 7000, then the existing failover proof (leader elect, publish, kill leader, re-elect, no committed loss) via /raftz + /v1/events/publish. Zero relay-raft references."
+    description: "Replaced by the GKE raft_failover e2e suite (tests/it/e2e/raft_failover.rs on k8s/overlays/gke-test, .github/workflows/gke-test.yml). Before that it was rewritten against the single `relay` auto-mode image: build the linux relay bin in a cached cargo container, thin relay:dev runtime image, kind create + load, apply inline heredoc manifests (headless + client Service, 3-replica StatefulSet with POD_NAME fieldRef / SHARD_COUNT 1 / REPLICAS_PER_SHARD 3 / VOTER_COUNT 3 / RELAY_PEER_SERVICE, PDB maxUnavailable 1) on port 7000, then the existing failover proof (leader elect, publish, kill leader, re-elect, no committed loss) via /raftz + /v1/events/publish. Zero relay-raft references."
   - path: tests/deploy_cli.rs
     action: create
     section: unit-test
