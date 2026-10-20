@@ -362,7 +362,7 @@ pub async fn publish(
         };
         return match propose_publish(&st, &raft, cmd).await {
             Ok(outcome) => encode_body(cbor, StatusCode::OK, &outcome),
-            Err(resp) => resp,
+            Err(resp) => *resp,
         };
     }
     let result = st.relay.publish_at(
@@ -390,7 +390,7 @@ async fn propose_publish(
     _st: &AppState,
     raft: &crate::cluster::raft::RelayRaft,
     cmd: crate::cluster::raft::PubCommand,
-) -> Result<crate::broker::types::AppendOutcome, Response> {
+) -> Result<crate::broker::types::AppendOutcome, Box<Response>> {
     match raft.publish(&cmd).await {
         Ok((_, Some(outcome))) => Ok(outcome),
         // A successful proposal is read-your-write on this replica, so its
@@ -401,13 +401,15 @@ async fn propose_publish(
             "raft_outcome_unavailable",
             format!("committed raft outcome at index {index} is unavailable"),
         )
-        .into_response()),
+        .into_response()
+        .into()),
         Err(e) => Err(ApiErr::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "raft_unavailable",
             e.to_string(),
         )
-        .into_response()),
+        .into_response()
+        .into()),
     }
 }
 
