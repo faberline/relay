@@ -1,0 +1,17 @@
+# GKE e2e suite `raft_failover` (tests/it/e2e/raft_failover.rs): three relay
+# voters from k8s/overlays/gke-test, reached at http://relay:7000 and each at
+# http://relay-<n>.relay-headless:7000. It replaces
+# scripts/kind-failover-smoke.sh.
+#
+# faberline/aw's run.sh deploys k8s/overlays/gke-test, waits for the
+# StatefulSet rollout, sets this folder's namespace and test image, adds the
+# ConfigMap gke-test-env (E2E_EXPECTED_*), applies it, and passes only when
+# Job/relay-e2e completes and its log does not say `running 0 tests`.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: relay
+
+resources:
+  - rbac.yaml
+  - job.yaml

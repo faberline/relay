@@ -69,8 +69,10 @@ The production HA deployment is the operator, not hand-applied YAML:
 
 `k8s/` provides a layered direct base plus dev/staging/prod/template overlays;
 the production operator CR remains the authoritative HA topology.
-`scripts/kind-failover-smoke.sh` drives a disposable three-voter leader-kill
-proof with the same standard topology variables.
+`k8s/overlays/gke-test` runs the base as three voters on the shared GKE test
+cluster, where the `raft_failover` e2e suite (`tests/it/e2e/raft_failover.rs`)
+deletes the leader pod and checks re-election and no committed loss with the
+same standard topology variables.
 
 ## Backup / restore
 
