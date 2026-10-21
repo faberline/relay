@@ -54,7 +54,7 @@ RELAY_IMAGE_PINS=(
 
 # `relay dockerfile render --variant release` substitutes CARGO_PKG_VERSION into
 # exactly these three lines of the committed Dockerfile.release and must
-# reproduce the file byte-for-byte (`cargo test -p relay --test deploy_cli`), so
+# reproduce the file byte-for-byte (`cargo test -p relay --test it deploy_cli::`), so
 # a Cargo.toml bump without this sync turns that test red; this sync is the fix.
 RELAY_DOCKERFILE=Dockerfile.release
 

@@ -137,14 +137,14 @@ fn dockerfile_render_reproduces_committed_fixtures() {
     let rendered = stdout(&["dockerfile", "render", "--variant", "source"]);
     assert_eq!(
         rendered,
-        include_str!("../Dockerfile"),
+        include_str!("../../Dockerfile"),
         "relay dockerfile render --variant source == committed Dockerfile"
     );
 
     let rendered = stdout(&["dockerfile", "render", "--variant", "release"]);
     assert_eq!(
         rendered,
-        include_str!("../Dockerfile.release"),
+        include_str!("../../Dockerfile.release"),
         "relay dockerfile render --variant release == committed Dockerfile.release"
     );
 
@@ -204,16 +204,19 @@ fn crd_render_is_structural_schema_safe() {
 fn gke_test_overlay_is_three_voter_auto_mode() {
     let base = parse_yaml_docs(
         "base statefulset",
-        include_str!("../k8s/base/statefulset.yaml"),
+        include_str!("../../k8s/base/statefulset.yaml"),
     );
-    let config = parse_yaml_docs("base configmap", include_str!("../k8s/base/configmap.yaml"));
+    let config = parse_yaml_docs(
+        "base configmap",
+        include_str!("../../k8s/base/configmap.yaml"),
+    );
     let patch = parse_yaml_docs(
         "gke-test statefulset patch",
-        include_str!("../k8s/overlays/gke-test/statefulset-patch.yaml"),
+        include_str!("../../k8s/overlays/gke-test/statefulset-patch.yaml"),
     );
     let overlay = parse_yaml_docs(
         "gke-test kustomization",
-        include_str!("../k8s/overlays/gke-test/kustomization.yaml"),
+        include_str!("../../k8s/overlays/gke-test/kustomization.yaml"),
     );
     let env = |sts: &serde_yaml::Value, k: &str| {
         sts["spec"]["template"]["spec"]["containers"][0]["env"]

@@ -48,7 +48,7 @@ e2e_tests:
     claim_id: guard-static-runtime-evidence
     contract_id: relay-guard-security-report
     category: security
-    test_path: tests/security_relay_security_hardening_guard_scan.rs
+    test_path: tests/it/security_relay_security_hardening_guard_scan.rs
     command: "vat run guard-security"
     assertions:
       - "guard scan over relay reports no untriaged Docker, Kubernetes, or static security findings."

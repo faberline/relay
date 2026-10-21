@@ -39,6 +39,10 @@ opt-level = 2
 [profile.test]
 opt-level = 1
 
+# A module is a file `src/<name>.rs`, never `src/<name>/mod.rs`.
+[workspace.lints.clippy]
+mod_module_files = "deny"
+
 [package]
 name = "relay"
 version = "0.4.13"
@@ -46,6 +50,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "relay core — durable ordered log per subject/shard serving broadcast (replay) and work-queue (lease/ack/redeliver) delivery."
+
+[lints]
+workspace = true
 
 [lib]
 name = "relay"
@@ -130,7 +137,7 @@ service-backup = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
 peer-tls = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
 # rustls config types surfaced by the peer_tls builder passthroughs. Always in
 # the graph via peer-tls, so no longer optional (the private rustls-provider
-# feature indirection collapsed; src/tls/mod.rs installs unconditionally).
+# feature indirection collapsed; src/tls.rs installs unconditionally).
 rustls = "0.23"
 # Shared polyglot OpenAPI client codegen (#1209, keep #777): `relay spec gen`
 # generates ts/py/rust clients from relay's own utoipa document — offline.
@@ -167,11 +174,11 @@ backup = ["dep:reqwest", "service-backup/http-client", "service-backup/s3"]
 # an endpoint is configured in a binary that was not built with OTLP support.
 otel = ["service-http/otlp"]
 # NOTE: the former private `rustls-provider` feature is gone — peer-tls
-# links rustls unconditionally now (#1209), so src/tls/mod.rs installs the
+# links rustls unconditionally now (#1209), so src/tls.rs installs the
 # process-level crypto provider in every build.
 
 [dev-dependencies]
-# Deploy-CLI render round-trip assertions (tests/deploy_cli.rs, tests/operator.rs).
+# Deploy-CLI render round-trip assertions (tests/it/deploy_cli.rs, tests/it/operator.rs).
 serde_yaml = { workspace = true }
 tempfile = "3"
 criterion = "0.5"
@@ -180,7 +187,7 @@ async-nats = { workspace = true }
 redis = { version = "0.27", features = ["tokio-comp"] }
 lapin = "2.5"
 transport-h2c = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-# The deterministic consensus simulation (tests/raft_core.rs) drives the core
+# The deterministic consensus simulation (tests/it/raft_core.rs) drives the core
 # directly; production code reaches raft only through raft-runtime.
 raft-core = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
 # h2c test clients for the transport/cluster integration tests.

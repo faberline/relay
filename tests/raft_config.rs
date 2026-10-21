@@ -4,6 +4,9 @@
 //! `raft_runtime::cluster` and the STANDARD downward-API env — the hand-derived
 //! ordinal/peer-DNS module is gone, per CONTRIBUTING's "never re-derive the
 //! ordinal math locally".
+//!
+//! isolation: these tests set and remove process-global env vars, so they must
+//! not share a process with the tests in `it`.
 
 use std::sync::Mutex;
 

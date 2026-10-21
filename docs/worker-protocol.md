@@ -57,5 +57,5 @@ work.
 ## Reference worker
 
 A throwaway reference worker exists only as a test
-(`tests/worker_loop.rs`); it drives this loop over h2c against an in-process
+(`tests/it/worker_loop.rs`); it drives this loop over h2c against an in-process
 relay. It is not shipped and is not a dependency.

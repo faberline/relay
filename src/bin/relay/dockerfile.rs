@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Subcommand, ValueEnum};
 
-use crate::write_or_print;
+use crate::output::write_or_print;
 
 /// `relay dockerfile <render>` — render relay's runtime image Dockerfiles.
 #[derive(clap::Args, Debug)]

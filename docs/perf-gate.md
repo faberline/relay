@@ -24,8 +24,8 @@ The production EC does not use the arena ratio model or hard-coded competitor
 inputs as an efficiency oracle. It runs:
 
 ```bash
-cargo test --release -p relay --test measured_performance \
-  measured_durable_lifecycle_gate -- --exact --ignored --nocapture
+cargo test --release -p relay --test it \
+  measured_performance::measured_durable_lifecycle_gate -- --exact --ignored --nocapture
 ```
 
 The report-only child creates temporary disk-backed Relay storage with
@@ -116,5 +116,5 @@ That is why the arena claim is split rather than hiding the losing cell.
 - relay-side measurement: `cargo bench -p relay` (criterion;
   [`benches/relay_bench.rs`](../benches/relay_bench.rs)) — the competitor-free
   local baseline for publish / lease+ack.
-- Gate rule + workload smoke: [`tests/perf_gate.rs`](../tests/perf_gate.rs).
-- Required measured envelope: [`tests/measured_performance.rs`](../tests/measured_performance.rs).
+- Gate rule + workload smoke: [`tests/it/perf_gate.rs`](../tests/it/perf_gate.rs).
+- Required measured envelope: [`tests/it/measured_performance.rs`](../tests/it/measured_performance.rs).

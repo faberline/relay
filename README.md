@@ -45,14 +45,14 @@ message id, and recover committed log state across restarts and segment
 rotation. Delete-on-ack: segments are reclaimed once every entry in them is
 acked, not by wall-clock age or size.
 
-- Gate: `cargo test -p relay --test relay_core --test durable --test segments`
+- Gate: `cargo test -p relay --test it -- relay_core:: durable:: segments::`
 
 #### Work queue lifecycle
 
 Competing-worker queue semantics with epoch-fenced leases, heartbeat extension,
 idempotent ack, expired-lease reclaim, and redelivery liveness.
 
-- Gate: `cargo test -p relay --test work_queue_api --test reconciler`
+- Gate: `cargo test -p relay --test it -- work_queue_api:: reconciler::`
 
 #### Raft HA and primary/replica topology
 
@@ -63,7 +63,7 @@ state and the applied-index floor, serves through real h2c nodes, and is
 dogfooded through a three-voter leader-kill suite on the GKE test cluster. Auto-mode takes no flags —
 downward-API env (`REPLICAS_PER_SHARD` > 1) flips replica mode.
 
-- Gate: `cargo test -p relay --test raft_core --test raft_persistence --test raft_cluster`
+- Gate: `cargo test -p relay --test it -- raft_core:: raft_persistence:: raft_cluster::`
 - Dogfood: `tests/it/e2e/raft_failover.rs` on `k8s/overlays/gke-test` (`.github/workflows/gke-test.yml`)
 - Source: `src/cluster/raft.rs`, [`docs/ha.md`](docs/ha.md)
 
@@ -82,7 +82,7 @@ backed by build-stamp provenance and kept out of relay's domain verbs:
 - `relay upgrade [--check]` — shared self-update through `cli-std`
 - `relay issue search|view|create` — tracker surface scoped to `app:relay`
 
-Gate: `cargo test -p relay --test worker_loop --test spec_cli --test deploy_cli --test raft_config --test raft_cluster`
+Gate: `cargo test -p relay --test it -- worker_loop:: spec_cli:: deploy_cli:: raft_cluster::` and `cargo test -p relay --test raft_config`
 
 #### HTTP/OpenAPI worker protocol
 
@@ -91,7 +91,7 @@ heartbeat, and ack. The served `/openapi.json` and the offline `relay spec` are
 twins of the same contract; `docs/worker-protocol.md` is the endpoint
 summary.
 
-- Gate: `cargo test -p relay --test http2_transport --test worker_loop --test spec_cli`
+- Gate: `cargo test -p relay --test it -- http2_transport:: worker_loop:: spec_cli::`
 
 #### Standard operational endpoints
 
@@ -110,7 +110,7 @@ flowing into every request span and structured log line. Every response carries
 a `Server-Timing: app;dur=<ms>` baseline (the shared
 `service-http::server_timing` contract, #2490).
 
-- Gate: `cargo test -p relay --test http2_transport --test auth --test spec_cli`
+- Gate: `cargo test -p relay --test it -- http2_transport:: auth:: spec_cli::`
 
 #### Chainable output
 
@@ -119,7 +119,7 @@ Raw artifact streams stay unwrapped bytes — `relay spec`,
 and admin verbs (`--out`, `relay backup`, `relay issue …`,
 `relay upgrade --check`) carry an explicit `next:` or a terminal marker.
 
-- Gate: `cargo test -p relay --test deploy_cli --test spec_cli`
+- Gate: `cargo test -p relay --test it -- deploy_cli:: spec_cli::`
 
 ### Operations
 
@@ -129,7 +129,7 @@ An operator-rendered StatefulSet with downward-API env auto-mode reads, offline
 CRD/operator/instance/dockerfile render verbs whose committed files are
 byte-equal fixtures, and a GKE test overlay for deployment dogfood.
 
-- Gate: `cargo test -p relay --test deploy_cli --test operator --test direct_k8s_assets --test raft_config`
+- Gate: `cargo test -p relay --test it -- deploy_cli:: operator:: direct_k8s_assets::` and `cargo test -p relay --test raft_config`
 - Dogfood: `k8s/overlays/gke-test` + `k8s/gke-test-job/raft_failover`
 - Assets: `k8s`
 
@@ -145,7 +145,7 @@ Measured 2026-07-17, default 60-second run: 5,622 fixed-state operations, zero
 errors, RSS 14,352 → 14,352 KiB, FD 14 → 14, threads 11 → 11, inspect p99
 1 → 1 ms.
 
-- Gate: `cargo test -p relay --test durable --test segments --test reconciler --test raft_persistence --test raft_cluster --test backup`
+- Gate: `cargo test -p relay --test it -- durable:: segments:: reconciler:: raft_persistence:: raft_cluster:: backup::`
 - Soak: `RELAY_SOAK_AUTOSTART=1 bash scripts/soak.sh`
 
 #### Security hardening
@@ -184,7 +184,7 @@ compete with RabbitMQ, NATS JetStream, Redis Streams, and Dragonfly in faberline
 workloads. Redpanda/Kafka-class replay journals are `tape` competitors, not
 relay competitors.
 
-- Gate: `cargo test -p relay --test relay_core --test work_queue_api --test worker_loop --test raft_core --test raft_persistence --test raft_cluster`
+- Gate: `cargo test -p relay --test it -- relay_core:: work_queue_api:: worker_loop:: raft_core:: raft_persistence:: raft_cluster::`
 
 #### Performance
 
