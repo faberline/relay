@@ -23,7 +23,7 @@ Service for peer DNS), and spawns one `RaftHost` for the whole node.
   the cleartext serve port.
 - `RELAY_PEERS=host:port,...` overrides peer DNS to run a multi-node group on
   one machine (the local/dev cluster recipe; proven by
-  `tests/raft_cluster.rs`).
+  `tests/it/raft_cluster.rs`).
 
 ## RelayStateMachine — what replicates, and the restart floor
 

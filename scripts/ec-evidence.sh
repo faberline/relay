@@ -119,78 +119,78 @@ self_test() {
 }
 
 performance_behavior() {
-  list_suite perf-work-queue cargo test -q -p relay --test work_queue_throughput -- --list
+  list_suite perf-work-queue cargo test -q -p relay --test it work_queue_throughput:: -- --list
   require_listed perf-work-queue \
-    ack_batch_skips_stale_epoch \
-    committed_watermark_tracks_contiguous_prefix \
-    concurrent_subjects_are_isolated_and_exactly_once \
-    cursor_leases_in_order \
-    lease_batch_returns_up_to_max \
-    prefers_redeliver_over_fresh
+    work_queue_throughput::ack_batch_skips_stale_epoch \
+    work_queue_throughput::committed_watermark_tracks_contiguous_prefix \
+    work_queue_throughput::concurrent_subjects_are_isolated_and_exactly_once \
+    work_queue_throughput::cursor_leases_in_order \
+    work_queue_throughput::lease_batch_returns_up_to_max \
+    work_queue_throughput::prefers_redeliver_over_fresh
   run_suite perf-work-queue 6 - \
-    cargo test -q -p relay --test work_queue_throughput -- --nocapture
+    cargo test -q -p relay --test it work_queue_throughput:: -- --nocapture
 
-  list_suite perf-decision-model cargo test -q -p relay --test perf_gate -- --list
+  list_suite perf-decision-model cargo test -q -p relay --test it perf_gate:: -- --list
   require_listed perf-decision-model \
-    gate_fails_when_must_beat_cell_is_lost \
-    gate_workloads_are_valid \
-    ratchet_fails_on_regression \
-    ratchet_holds_when_no_regression \
-    report_only_cell_does_not_fail_when_behind
+    perf_gate::gate_fails_when_must_beat_cell_is_lost \
+    perf_gate::gate_workloads_are_valid \
+    perf_gate::ratchet_fails_on_regression \
+    perf_gate::ratchet_holds_when_no_regression \
+    perf_gate::report_only_cell_does_not_fail_when_behind
   run_suite perf-decision-model 5 - \
-    cargo test -q -p relay --test perf_gate -- --nocapture
+    cargo test -q -p relay --test it perf_gate:: -- --nocapture
 }
 
 performance_efficiency() {
   list_suite perf-measured \
-    cargo test -q --release -p relay --test measured_performance -- --ignored --list
+    cargo test -q --release -p relay --test it measured_performance:: -- --ignored --list
   require_listed perf-measured \
-    durable_lifecycle_report_child \
-    measured_durable_lifecycle_gate
+    measured_performance::durable_lifecycle_report_child \
+    measured_performance::measured_durable_lifecycle_gate
   run_suite perf-measured 1 'relay_perf_gate workload=' \
-    cargo test -q --release -p relay --test measured_performance \
-      measured_durable_lifecycle_gate -- --exact --ignored --nocapture
+    cargo test -q --release -p relay --test it \
+      measured_performance::measured_durable_lifecycle_gate -- --exact --ignored --nocapture
 
   echo ">> meter evidence: measured durable lifecycle"
-  meter test -- --release -p relay --test measured_performance \
-    measured_durable_lifecycle_gate -- --exact --ignored --nocapture
+  meter test -- --release -p relay --test it \
+    measured_performance::measured_durable_lifecycle_gate -- --exact --ignored --nocapture
 }
 
 security_behavior() {
-  list_suite security-auth cargo test -q -p relay --test auth -- --list
+  list_suite security-auth cargo test -q -p relay --test it auth:: -- --list
   require_listed security-auth \
-    consume_side_requires_read_grant_on_subject \
-    error_bodies_use_shared_service_auth_shape \
-    off_mode_keeps_tokenless_behavior \
-    probes_stay_tokenless_under_required_auth \
-    publish_requires_write_grant_on_subject \
-    relay_auth_adapter_rotates_the_shared_registry_without_restart \
-    resolve_fails_fast_on_missing_or_bad_registry \
-    streaming_consume_enforces_read_grant
-  run_suite security-auth 8 - cargo test -q -p relay --test auth -- --nocapture
+    auth::consume_side_requires_read_grant_on_subject \
+    auth::error_bodies_use_shared_service_auth_shape \
+    auth::off_mode_keeps_tokenless_behavior \
+    auth::probes_stay_tokenless_under_required_auth \
+    auth::publish_requires_write_grant_on_subject \
+    auth::relay_auth_adapter_rotates_the_shared_registry_without_restart \
+    auth::resolve_fails_fast_on_missing_or_bad_registry \
+    auth::streaming_consume_enforces_read_grant
+  run_suite security-auth 8 - cargo test -q -p relay --test it auth:: -- --nocapture
 
-  list_suite security-admission cargo test -q -p relay --test service_admission -- --list
+  list_suite security-admission cargo test -q -p relay --test it service_admission:: -- --list
   require_listed security-admission \
-    default_router_keeps_admission_disabled \
-    publish_uses_shared_write_admission
+    service_admission::default_router_keeps_admission_disabled \
+    service_admission::publish_uses_shared_write_admission
   run_suite security-admission 2 - \
-    cargo test -q -p relay --test service_admission -- --nocapture
+    cargo test -q -p relay --test it service_admission:: -- --nocapture
 }
 
 security_boundaries() {
-  list_suite security-peer cargo test -q -p relay --test raft_peer_mtls -- --list
+  list_suite security-peer cargo test -q -p relay --test it raft_peer_mtls:: -- --list
   require_listed security-peer \
-    trusted_relay_peers_replicate_messages_over_mtls \
-    untrusted_relay_peer_certificate_is_rejected
+    raft_peer_mtls::trusted_relay_peers_replicate_messages_over_mtls \
+    raft_peer_mtls::untrusted_relay_peer_certificate_is_rejected
   run_suite security-peer 2 - \
-    cargo test -q -p relay --test raft_peer_mtls -- --nocapture
+    cargo test -q -p relay --test it raft_peer_mtls:: -- --nocapture
 
-  list_suite security-k8s cargo test -q -p relay --test direct_k8s_assets -- --list
+  list_suite security-k8s cargo test -q -p relay --test it direct_k8s_assets:: -- --list
   require_listed security-k8s \
-    direct_base_is_a_restricted_durable_singleton \
-    prod_profile_uses_security_components_without_voter_hpa
+    direct_k8s_assets::direct_base_is_a_restricted_durable_singleton \
+    direct_k8s_assets::prod_profile_uses_security_components_without_voter_hpa
   run_suite security-k8s 2 - \
-    cargo test -q -p relay --test direct_k8s_assets -- --nocapture
+    cargo test -q -p relay --test it direct_k8s_assets:: -- --nocapture
 }
 
 security_reload() {
@@ -209,18 +209,18 @@ security_reload() {
 security_stability() {
   security_reload
 
-  list_suite security-relay-rotation cargo test -q -p relay --test auth -- --list
+  list_suite security-relay-rotation cargo test -q -p relay --test it auth:: -- --list
   require_listed security-relay-rotation \
-    relay_auth_adapter_rotates_the_shared_registry_without_restart
+    auth::relay_auth_adapter_rotates_the_shared_registry_without_restart
   run_suite security-relay-rotation 1 - \
-    cargo test -q -p relay --test auth \
-      relay_auth_adapter_rotates_the_shared_registry_without_restart -- --exact --nocapture
+    cargo test -q -p relay --test it \
+      auth::relay_auth_adapter_rotates_the_shared_registry_without_restart -- --exact --nocapture
 
-  list_suite security-trusted-peer cargo test -q -p relay --test raft_peer_mtls -- --list
-  require_listed security-trusted-peer trusted_relay_peers_replicate_messages_over_mtls
+  list_suite security-trusted-peer cargo test -q -p relay --test it raft_peer_mtls:: -- --list
+  require_listed security-trusted-peer raft_peer_mtls::trusted_relay_peers_replicate_messages_over_mtls
   run_suite security-trusted-peer 1 - \
-    cargo test -q -p relay --test raft_peer_mtls \
-      trusted_relay_peers_replicate_messages_over_mtls -- --exact --nocapture
+    cargo test -q -p relay --test it \
+      raft_peer_mtls::trusted_relay_peers_replicate_messages_over_mtls -- --exact --nocapture
 }
 
 security_guard() {
@@ -230,11 +230,8 @@ security_guard() {
 
   echo ">> meter evidence: Relay security binaries"
   meter test -- -p relay \
-    --test auth \
-    --test service_admission \
-    --test raft_peer_mtls \
-    --test direct_k8s_assets \
-    -- --nocapture
+    --test it \
+    -- auth:: service_admission:: raft_peer_mtls:: direct_k8s_assets:: --nocapture
   echo ">> meter evidence: service-auth reload"
   meter test -- \
     --manifest-path "$(bash scripts/faberline-core-test.sh --root)/Cargo.toml" \

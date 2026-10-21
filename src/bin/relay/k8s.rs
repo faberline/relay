@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Subcommand, ValueEnum};
 
-use crate::write_or_print;
+use crate::output::write_or_print;
 
 /// `relay k8s <crd|operator|instance>` — cluster artifacts split by lifecycle
 /// layer.

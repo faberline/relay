@@ -265,7 +265,8 @@ fn measured_durable_lifecycle_gate() {
     let output = Command::new(std::env::current_exe().expect("current integration test binary"))
         .args([
             "--exact",
-            "durable_lifecycle_report_child",
+            // The test name in the one `it` binary is `<module>::<test>`.
+            "measured_performance::durable_lifecycle_report_child",
             "--ignored",
             "--nocapture",
         ])

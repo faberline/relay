@@ -7,7 +7,7 @@ fn yaml(input: &str) -> Value {
 
 #[test]
 fn direct_base_is_a_restricted_durable_singleton() {
-    let statefulset = yaml(include_str!("../k8s/base/statefulset.yaml"));
+    let statefulset = yaml(include_str!("../../k8s/base/statefulset.yaml"));
     assert_eq!(statefulset["kind"], "StatefulSet");
     assert_eq!(statefulset["spec"]["replicas"], 1);
     assert_eq!(statefulset["spec"]["serviceName"], "relay-headless");
@@ -34,7 +34,7 @@ fn direct_base_is_a_restricted_durable_singleton() {
     );
     let env = container["env"].as_sequence().unwrap();
     assert!(env.iter().any(|entry| entry["name"] == "RELAY_LOG_FORMAT"));
-    let config = yaml(include_str!("../k8s/base/configmap.yaml"));
+    let config = yaml(include_str!("../../k8s/base/configmap.yaml"));
     assert_eq!(config["data"]["RELAY_LOG_FORMAT"], "json");
     for (name, value) in [
         ("SHARD_COUNT", "1"),
@@ -52,7 +52,7 @@ fn direct_base_is_a_restricted_durable_singleton() {
 
 #[test]
 fn prod_profile_uses_security_components_without_voter_hpa() {
-    let prod = include_str!("../k8s/overlays/prod/kustomization.yaml");
+    let prod = include_str!("../../k8s/overlays/prod/kustomization.yaml");
     assert!(prod.contains("RELAY_TOKEN_REGISTRY_FILE"));
     assert!(prod.contains("secretName: relay-token-registry"));
     assert!(prod.contains("readOnly: true"));
@@ -62,7 +62,7 @@ fn prod_profile_uses_security_components_without_voter_hpa() {
     assert!(!prod.contains("kind: HPA"));
 
     let policy = yaml(include_str!(
-        "../k8s/components/network-policy/networkpolicy.yaml"
+        "../../k8s/components/network-policy/networkpolicy.yaml"
     ));
     assert_eq!(policy["kind"], "NetworkPolicy");
     assert_eq!(policy["spec"]["podSelector"]["matchLabels"]["app"], "relay");

@@ -36,7 +36,7 @@ e2e_tests:
     claim_id: normalized-win-ratchet-decision-model
     contract_id: relay-measured-durable-lifecycle-envelope
     category: efficiency
-    test_path: tests/efficiency_relay_competitor_performance_measured_durable_lifecycle.rs
+    test_path: tests/it/efficiency_relay_competitor_performance_measured_durable_lifecycle.rs
     command: "bash scripts/ec-evidence.sh performance-efficiency"
     assertions:
       - "A report-only child process uses temporary disk storage with FsyncPolicy::Always to publish and then lease/ack exactly 2,000 128-byte payloads in 100-message batches."
