@@ -1,5 +1,6 @@
 [project]
 name = "relay"
+kind = "saas-service"
 cap_path = "README.md"
 label = "app:relay"
 
@@ -20,7 +21,7 @@ command = "vat run guard-security"
 name = "relay"
 paths = ["**"]
 target = "rust"
-test_cmd = "cargo test -p relay"
+test_cmd = "cargo test --workspace"
 codegen.profile = "rust/score-crate"
 
 # AW-EC-BEGIN

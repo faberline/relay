@@ -1,4 +1,4 @@
-# GKE e2e suite `raft_failover` (tests/it/e2e/raft_failover.rs): three relay
+# GKE e2e suite `raft_failover` (crates/relay/tests/it/e2e/raft_failover.rs): three relay
 # voters from k8s/overlays/gke-test, reached at http://relay:7000 and each at
 # http://relay-<n>.relay-headless:7000. It replaces
 # scripts/kind-failover-smoke.sh.

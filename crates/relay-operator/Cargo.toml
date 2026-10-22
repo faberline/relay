@@ -1,0 +1,24 @@
+[package]
+name = "relay-operator"
+description = "relay operator: the Relay custom resource and its reconcile loop over service-k8s"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+k8s-openapi.workspace = true
+kube.workspace = true
+raft-runtime.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+service-backup.workspace = true
+service-k8s.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,17 @@
+[package]
+name = "relay-shared-kernel"
+description = "relay shared kernel: the core data model and the in-process broker configuration"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

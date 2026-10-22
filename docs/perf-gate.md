@@ -67,7 +67,7 @@ failing complete measurement loss or an order-of-magnitude-plus regression.
   run them when AOF/appendonly is off. The measured posture includes
   delete-on-ack.
 - arena reduces each cell to a `ratio` normalized so **higher is better for
-  relay**, then applies the gate (see [`perf_gate`](../src/perf_gate.rs)):
+  relay**, then applies the gate (see [`perf_gate`](../crates/relay/src/perf_gate.rs)):
   - **ratchet** — `ratio >= baseline_ratio * ratchet` (no regression since the
     last passing run; default `ratchet = 0.95`);
   - **must-beat** — on claimed cells, `ratio >= 1.0` (relay is actually ahead).
@@ -110,11 +110,11 @@ That is why the arena claim is split rather than hiding the losing cell.
 
 ## Artifacts
 
-- Closed-loop harness: [`examples/bench_compare.rs`](../examples/bench_compare.rs).
+- Closed-loop harness: [`crates/relay/examples/bench_compare.rs`](../crates/relay/examples/bench_compare.rs).
 - Gate spec: [`faberline/arena` `examples/relay-vs-rabbitmq-nats-redis.toml`](https://github.com/faberline/arena/blob/main/examples/relay-vs-rabbitmq-nats-redis.toml)
 - Production EC source: [`external-contracts/competitor-performance/efficiency/perf-gate.md`](../external-contracts/competitor-performance/efficiency/perf-gate.md), generated into `aw.toml` and verified by `aw ec verify --project relay`.
 - relay-side measurement: `cargo bench -p relay` (criterion;
-  [`benches/relay_bench.rs`](../benches/relay_bench.rs)) — the competitor-free
+  [`crates/relay/benches/relay_bench.rs`](../crates/relay/benches/relay_bench.rs)) — the competitor-free
   local baseline for publish / lease+ack.
 - Gate rule + workload smoke: [`tests/it/perf_gate.rs`](../tests/it/perf_gate.rs).
 - Required measured envelope: [`tests/it/measured_performance.rs`](../tests/it/measured_performance.rs).

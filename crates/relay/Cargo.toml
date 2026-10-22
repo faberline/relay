@@ -1,0 +1,145 @@
+# HANDWRITE-BEGIN gap="missing-generator:config:7d099e74" tracker="pending-tracker" reason="Manifest for the relay assembly crate: the single `relay` binary over the bounded-context crates."
+[package]
+name = "relay"
+description = "relay core — durable ordered log per subject/shard serving broadcast (replay) and work-queue (lease/ack/redeliver) delivery."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+name = "relay"
+path = "src/lib.rs"
+
+[[bin]]
+name = "relay"
+path = "src/bin/relay/main.rs"
+
+[[bench]]
+name = "relay_bench"
+harness = false
+
+[[example]]
+name = "bench_compare"
+path = "examples/bench_compare.rs"
+
+[dependencies]
+# The bounded-context crates (see ddd.toml). The broker core is
+# payload-agnostic (epic #120: "knows nothing about workflows"): a message
+# body is carried as opaque JSON. relay depends on no other faberline
+# project, only faberline/core and third-party crates.
+relay-access.workspace = true
+relay-broker.workspace = true
+relay-operator = { workspace = true, optional = true }
+relay-queue.workspace = true
+relay-replication.workspace = true
+relay-shared-kernel.workspace = true
+relay-storage.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+axum.workspace = true
+futures.workspace = true
+utoipa = { workspace = true, features = ["axum_extras"] }
+
+# Shared raft driver (#544): RaftHost tick/pump/h2c transport + RaftStore +
+# ClusterTopology (k8s downward-API derive) + OutcomeWindow.
+raft-runtime.workspace = true
+# Shared service shell (#1205): probe routes, the h2c + HTTP/1.1 one-port
+# serve loop, SIGTERM-aware graceful drain, and the {error, message} envelope.
+service-http.workspace = true
+# Shared request-auth contract (#1206).
+service-auth.workspace = true
+# Serve-path tracing init (RUST_LOG wins, else info EnvFilter — keep's pattern).
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+# The single `relay` CLI bin (CONTRIBUTING.md CLI convention): clap parsing +
+# the standard llm/upgrade/issue ops via the shared cli-std lib. Offline paths
+# always build; the HTTPS paths are pulled in by the `self-update`/`issue`
+# features via `cli-std/online`.
+anyhow.workspace = true
+clap = { workspace = true, features = ["env"] }
+cli-std.workspace = true
+
+# K8s operator CLI (feature `operator`). Optional so the serving image never
+# links kube-rs unless built with `--features operator`.
+kube = { workspace = true, optional = true }
+k8s-openapi = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
+service-k8s = { workspace = true, optional = true }
+# YAML serialization: the generated CRD and `relay spec --format openapi-yaml`.
+serde_yaml.workspace = true
+
+# Shared backup contract (#1209). Unconditional — the schema types and the
+# local sink are cheap; only the HTTP fetch path of `relay backup` needs the
+# `backup` feature (reqwest + the lib's s3 sink).
+service-backup.workspace = true
+# Shared peer-mTLS material loading (#1209, lumen #971). src/tls/peer.rs is
+# the thin RELAY_PEER-prefix adapter.
+peer-tls.workspace = true
+# rustls config types surfaced by the peer_tls builder passthroughs.
+rustls.workspace = true
+# Shared polyglot OpenAPI client codegen (#1209, keep #777): `relay spec gen`.
+openapi-codegen.workspace = true
+# HTTP client for `relay backup`'s snapshot fetch (feature `backup` only).
+reqwest = { workspace = true, optional = true }
+
+[build-dependencies]
+# Stamp RELAY_GIT_SHA / RELAY_BUILT_AT / RELAY_TARGET for cli-std's ToolInfo.
+build-stamp.workspace = true
+
+[features]
+default = []
+# self-update / issue — enable the online (HTTPS) paths of the shared CLI-ops
+# lib. Release builds enable them.
+self-update = ["cli-std/online"]
+issue = ["cli-std/online"]
+# operator — the relay-operator crate: a RelaySpec CRD + ManagedService render,
+# driven by service_k8s::run. Pulls kube-rs, so the serving image stays
+# kube-free unless built with this feature (#1208).
+operator = [
+    "dep:relay-operator",
+    "dep:kube",
+    "dep:k8s-openapi",
+    "dep:schemars",
+    "dep:service-k8s",
+]
+# backup — `relay backup` (#1209): fetches a snapshot from a running node's
+# `GET /admin/backup` over HTTP and ships it to a core/service-backup sink.
+backup = [
+    "dep:reqwest",
+    "relay-replication/backup",
+    "service-backup/http-client",
+    "service-backup/s3",
+]
+# otel — enable OTLP trace export in the shared service-http tracing shell.
+otel = ["service-http/otlp"]
+
+[dev-dependencies]
+# Deploy-CLI render round-trip assertions (tests/it/deploy_cli.rs, tests/it/operator.rs).
+serde_yaml.workspace = true
+tempfile.workspace = true
+# CBOR response decoding in tests/it/http2_transport.rs.
+ciborium.workspace = true
+criterion.workspace = true
+# Competitor work-queue comparison harness (examples/bench_compare.rs).
+async-nats.workspace = true
+redis.workspace = true
+lapin.workspace = true
+transport-h2c.workspace = true
+# The deterministic consensus simulation (tests/it/raft_core.rs) drives the core
+# directly; production code reaches raft only through raft-runtime.
+raft-core.workspace = true
+# h2c test clients for the transport/cluster integration tests.
+reqwest.workspace = true
+rcgen.workspace = true
+tower = { workspace = true, features = ["util"] }
+# HANDWRITE-END

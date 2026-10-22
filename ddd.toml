@@ -1,9 +1,13 @@
+# Architecture contract for relay. relay is a virtual workspace: one crate per
+# context under crates/, the data model and config as the shared kernel, and
+# the `relay` assembly crate (aw docs/standards/saas-service.md). depends_on
+# lists the other relay contexts a context uses. Shared building blocks come
+# from faberline/core.
+
 schema = 1
 
-# Report only: the single-member [workspace] in Cargo.toml (A2) stays until
-# the crate split.
 [migration]
-enforce = false
+enforce = true
 
 [policy]
 version = 1
@@ -48,7 +52,7 @@ test_data_dirs = ["fixtures", "compile_fail", "ui"]
 one_context_per_crate = false
 
 # Layers each layer may use inside one context. The shared kernel is usable by
-# every layer; assembly code (lib.rs, main.rs, src/bin) is unrestricted. A
+# every layer; assembly code (the [assembly] crates) is unrestricted. A
 # multi-file binary is src/bin/<name>/main.rs plus sibling modules: B6 keeps
 # the entry file thin and does not apply to those modules.
 [policy.layer_deps]
@@ -110,35 +114,56 @@ shared_kernel_crate = "{repo}-shared-kernel"
 [policy.lints.clippy]
 mod_module_files = "deny"
 
-# Assembly code: the rustls provider install, the perf-gate rule, and the
-# relay binary. It may use every context.
-[assembly]
-modules = ["src/tls", "src/perf_gate.rs", "src/bin"]
+# The relay data model (subjects, sequences, leases, payloads) and the
+# in-process broker config. Storage, the broker, replication and the HTTP
+# surface all speak these types.
+[shared_kernel]
+path = "crates/relay-shared-kernel/src"
 
-# The in-process work-queue core: config, log, engine, work queue.
+# Assembly: `relay` re-exports the contexts as the `relay` library and holds
+# the rustls provider install, the perf-gate rule, the `relay` binary, and the
+# integration tests. Unrestricted.
+[assembly]
+crates = ["relay"]
+
+# The durable, segmented, ordered log per (subject, shard).
 [[contexts]]
-name = "broker"
+name = "storage"
 depends_on = []
 [contexts.layers]
-application = "src/broker"
+infrastructure = "crates/relay-storage/src"
+
+# The in-process work-queue core: engine, shard routing, work queue.
+[[contexts]]
+name = "broker"
+depends_on = ["storage"]
+[contexts.layers]
+application = "crates/relay-broker/src"
 
 # Raft HA, the lease reconciler and backup shipping.
 [[contexts]]
 name = "replication"
 depends_on = ["broker"]
 [contexts.layers]
-infrastructure = "src/cluster"
+infrastructure = "crates/relay-replication/src"
+
+# Bearer auth over core/service-auth.
+[[contexts]]
+name = "access"
+depends_on = []
+[contexts.layers]
+application = "crates/relay-access/src"
 
 # The HTTP/h2c + OpenAPI surface.
 [[contexts]]
-name = "transport"
-depends_on = ["broker", "replication"]
+name = "queue"
+depends_on = ["access", "broker", "replication"]
 [contexts.layers]
-interfaces = "src/transport"
+interfaces = "crates/relay-queue/src"
 
-# The Kubernetes operator (feature `operator`).
+# The Kubernetes operator.
 [[contexts]]
 name = "operator"
 depends_on = []
 [contexts.layers]
-infrastructure = "src/operator"
+infrastructure = "crates/relay-operator/src"

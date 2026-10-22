@@ -1,0 +1,31 @@
+[package]
+name = "relay-queue"
+description = "relay queue: the HTTP/h2c data-plane router, wire models, consume stream, OpenAPI, and request metrics"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+axum.workspace = true
+chrono.workspace = true
+ciborium.workspace = true
+futures.workspace = true
+metrics-prometheus.workspace = true
+relay-access.workspace = true
+relay-broker.workspace = true
+relay-replication.workspace = true
+relay-shared-kernel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+service-auth.workspace = true
+service-http.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+utoipa = { workspace = true, features = ["axum_extras"] }
+
+[lints]
+workspace = true

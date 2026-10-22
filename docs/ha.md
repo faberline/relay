@@ -27,7 +27,7 @@ Service for peer DNS), and spawns one `RaftHost` for the whole node.
 
 ## RelayStateMachine — what replicates, and the restart floor
 
-`src/cluster/raft.rs` wires the engine as a `raft_runtime::RaftStateMachine`:
+`crates/relay-replication/src/raft.rs` wires the engine as a `raft_runtime::RaftStateMachine`:
 
 - **Command = `RelayCommand`** — publish, lease/batch lease, ack/batch ack,
   release, heartbeat, and reconcile all route through `host.propose`. The
