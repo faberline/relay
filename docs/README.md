@@ -16,5 +16,6 @@ Project-level documentation for relay. Usage starts at the root
 
 | ADR | Decision |
 |-----|----------|
-| [0001](adr/0001-single-crate-layered-modules.md) | One crate on faberline/core; each context is one top-level module, checked by `ddd.toml`. |
+| [0001](adr/0001-single-crate-layered-modules.md) | Superseded by 0003. One crate on faberline/core; each context was one top-level module. |
 | [0002](adr/0002-pull-not-push.md) | relay owns worker-leased pull; defer owns scheduled push and tape owns broadcast replay. |
+| [0003](adr/0003-multi-crate-workspace.md) | Virtual workspace on faberline/core; one `relay-<context>` crate per context, checked by `ddd.toml`. |

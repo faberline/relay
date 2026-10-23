@@ -41,11 +41,11 @@ jobs:
         run: |
           set -euo pipefail
           cargo fmt --all -- --check
-          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
           # The release gate builds default features; --all-features adds the
           # operator and backup tests it does not reach.
-          cargo test --locked -p relay
-          cargo test --locked -p relay --all-features
+          cargo test --locked --workspace
+          cargo test --locked --workspace --all-features
       - name: Release contract
         shell: bash
         run: |

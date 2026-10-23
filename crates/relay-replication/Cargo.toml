@@ -1,0 +1,30 @@
+[package]
+name = "relay-replication"
+description = "relay replication: the raft state machine, the lease reconciler, and backup shipping"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+chrono.workspace = true
+raft-runtime.workspace = true
+relay-broker.workspace = true
+relay-shared-kernel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+service-backup.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[features]
+# backup — the `relay backup` fetch and sink path (service-backup HTTP client
+# and s3 sink).
+backup = ["service-backup/http-client", "service-backup/s3"]
+
+[lints]
+workspace = true

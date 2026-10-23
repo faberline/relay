@@ -1,5 +1,5 @@
 # relay on Faberline's shared GKE test cluster (faberline-test), for the
-# cluster e2e suites in tests/it/e2e/ (faberline/aw
+# cluster e2e suites in crates/relay/tests/it/e2e/ (faberline/aw
 # docs/standards/test-cluster.md).
 #
 # faberline/aw's gke-test workflow renders this overlay, sets the image under

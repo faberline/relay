@@ -4,7 +4,7 @@
 # (three raft voters) with the image under test on pool-relay-server, runs one
 # suite's test Job on pool-relay-client, uploads the evidence artifact
 # gke-test-evidence-<run_id>-<attempt>-<suite>, and tears the namespace down.
-# The test Job runs the Rust suite tests/it/e2e/<suite>.rs from the
+# The test Job runs the Rust suite crates/relay/tests/it/e2e/<suite>.rs from the
 # relay-test-client image; every check, image identity included, is in Rust
 # (aw docs/standards/rust-tests.md).
 #
@@ -35,8 +35,7 @@ on:
       - "k8s/base/**"
       - "k8s/overlays/gke-test/**"
       - "k8s/gke-test-job/**"
-      - "src/**"
-      - "tests/it/**"
+      - "crates/**"
   workflow_dispatch:
     inputs:
       suite:

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Superseded by [ADR 0003](0003-multi-crate-workspace.md).
 
 ## Context
 

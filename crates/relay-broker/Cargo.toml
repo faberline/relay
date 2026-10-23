@@ -1,0 +1,22 @@
+[package]
+name = "relay-broker"
+description = "relay broker: the single-cast work queue over the durable log, shard routing, and the engine facade"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+chrono.workspace = true
+crc32fast.workspace = true
+raft-runtime.workspace = true
+relay-shared-kernel.workspace = true
+relay-storage.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

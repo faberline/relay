@@ -1,31 +1,75 @@
 # SPEC-MANAGED: tech-design/logic/core-durable-log-single-multi-broadcast-delivery-model.md#changes
-# HANDWRITE-BEGIN gap="missing-generator:config:7d099e74" tracker="pending-tracker" reason="Manifest for the standalone HTTP/2 queue core (no external project deps)."
+# HANDWRITE-BEGIN gap="missing-generator:config:7d099e74" tracker="pending-tracker" reason="Virtual workspace manifest for the relay bounded-context crates (aw docs/standards/saas-service.md)."
 [workspace]
 resolver = "2"
-members = ["."]
+# One crate per relay bounded context plus the shared kernel and the `relay`
+# assembly crate (see ddd.toml). Generic service infrastructure comes from
+# faberline/core, never from here.
+members = ["crates/*"]
 
 [workspace.package]
-authors = ["Chris Cheng <chris.cheng.c4@gmail.com>"]
+# relay releases independently (relay@<version> tags). Every member inherits
+# this version; the release scripts and workflows read the first column-0
+# `version = "` line of this file.
+version = "0.4.13"
 edition = "2021"
+authors = ["Chris Cheng <chris.cheng.c4@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/faberline/relay"
 
 [workspace.dependencies]
-tokio = { version = "1.40", features = ["full"] }
+# relay crates.
+relay = { path = "crates/relay" }
+relay-access = { path = "crates/relay-access" }
+relay-broker = { path = "crates/relay-broker" }
+relay-operator = { path = "crates/relay-operator" }
+relay-queue = { path = "crates/relay-queue" }
+relay-replication = { path = "crates/relay-replication" }
+relay-shared-kernel = { path = "crates/relay-shared-kernel" }
+relay-storage = { path = "crates/relay-storage" }
+
+# faberline/core building blocks.
+build-stamp = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
+cli-std = { git = "https://github.com/faberline/core", tag = "v0.4.14", default-features = false }
+metrics-prometheus = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
+openapi-codegen = { git = "https://github.com/faberline/core", tag = "v0.4.14", version = "0.5" }
+peer-tls = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
+raft-core = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
+raft-runtime = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
+service-auth = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
+service-backup = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
+service-http = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
+service-k8s = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
+transport-h2c = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
+
+# Third-party. kube-rs versions mirror the other faberline users so the
+# lockfile stays single-versioned.
+anyhow = "1.0"
+async-nats = "0.38"
+axum = { version = "0.8", features = ["ws"] }
+chrono = { version = "0.4", features = ["serde"] }
+ciborium = "0.2"
+clap = { version = "4", features = ["derive", "string"] }
+crc32fast = "1.4"
+criterion = "0.5"
 futures = "0.3"
+k8s-openapi = { version = "0.24", features = ["v1_32"] }
+kube = { version = "0.98", features = ["runtime", "derive", "client"] }
+lapin = "2.5"
+rcgen = "0.13"
+redis = { version = "0.27", features = ["tokio-comp"] }
+reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "system-proxy", "rustls-tls-native-roots", "json", "cookies", "gzip", "brotli", "multipart", "stream"] }
+rustls = "0.23"
+schemars = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 serde_yaml = "0.9"
-anyhow = "1.0"
-reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "system-proxy", "rustls-tls-native-roots", "json", "cookies", "gzip", "brotli", "multipart", "stream"] }
-axum = { version = "0.8", features = ["ws"] }
+tempfile = "3"
+tokio = { version = "1.40", features = ["full"] }
 tower = "0.5"
-utoipa = "4"
-chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
-clap = { version = "4", features = ["derive", "string"] }
-async-nats = "0.38"
+utoipa = "4"
 
 [profile.release]
 opt-level = 3
@@ -42,160 +86,4 @@ opt-level = 1
 # A module is a file `src/<name>.rs`, never `src/<name>/mod.rs`.
 [workspace.lints.clippy]
 mod_module_files = "deny"
-
-[package]
-name = "relay"
-version = "0.4.13"
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-description = "relay core — durable ordered log per subject/shard serving broadcast (replay) and work-queue (lease/ack/redeliver) delivery."
-
-[lints]
-workspace = true
-
-[lib]
-name = "relay"
-path = "src/lib.rs"
-
-[[bin]]
-name = "relay"
-path = "src/bin/relay/main.rs"
-
-[[bench]]
-name = "relay_bench"
-harness = false
-
-[dependencies]
-# The broker core is payload-agnostic (epic #120: "knows nothing about
-# workflows"): a message body is carried as opaque JSON. relay stays standalone
-# — it depends on no other faberline project, only third-party crates.
-serde = { workspace = true }
-serde_json = { workspace = true }
-chrono = { workspace = true }
-
-# HTTP/2 (h2c) + OpenAPI transport (#115).
-tokio = { workspace = true }
-axum = { workspace = true }
-futures = { workspace = true }
-utoipa = { workspace = true, features = ["axum_extras"] }
-ciborium = "0.2"
-crc32fast = "1.4"
-
-# Shared raft driver (#544): RaftHost tick/pump/h2c transport + RaftStore +
-# ClusterTopology (k8s downward-API derive) + OutcomeWindow. relay supplies
-# only the RelayStateMachine; the hand-rolled driver/store/config are gone.
-raft-runtime = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-
-# Shared service shell (#1205): standard probe routes (/healthz /readyz
-# /metrics /openapi.json /docs), the h2c + HTTP/1.1 one-port serve loop,
-# SIGTERM-aware graceful drain, and the {error, message} ApiErr envelope.
-service-http = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-# Shared request-auth contract (#1206): Bearer extraction + auth_middleware +
-# the role_map StaticRoleMapVerifier implementing RELAY_AUTH=off|required +
-# RELAY_TOKEN_REGISTRY_FILE, with the shared {error, message} 401/403 shape.
-service-auth = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-# Prometheus metric primitives (Counter/Latency + text-format render) for
-# RelayMetrics.
-metrics-prometheus = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-# Serve-path tracing init (RUST_LOG wins, else info EnvFilter — keep's pattern).
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
-
-# The single `relay` CLI bin (CONTRIBUTING.md CLI convention): clap parsing +
-# the standard llm/upgrade/issue ops via the shared cli-std lib. Offline paths
-# always build; the HTTPS paths are pulled in by the `self-update`/`issue`
-# features via `cli-std/online`.
-anyhow = { workspace = true }
-clap = { workspace = true, features = ["env"] }
-cli-std = { git = "https://github.com/faberline/core", tag = "v0.4.14", default-features = false }
-
-# K8s operator (feature `operator`) — the shared core/service-k8s scaffold + render
-# toolkit (#1208). relay supplies a RelaySpec CRD + ManagedService and gets the
-# reconcile controller for free. Versions mirror the workspace's existing
-# kube-rs users (keep / lumen / mambalibs) so the lockfile stays
-# single-versioned. Optional so the serving image never links kube-rs unless
-# built with `--features operator`.
-kube = { version = "0.98", features = ["runtime", "derive", "client"], optional = true }
-k8s-openapi = { version = "0.24", features = ["v1_32"], optional = true }
-schemars = { version = "0.8", optional = true }
-service-k8s = { git = "https://github.com/faberline/core", tag = "v0.4.14", optional = true }
-# YAML serialization: the generated CRD (`relay k8s crd render` in the operator
-# build) and `relay spec --format openapi-yaml` (default build) — unconditional
-# since the spec verb shipped (#1209).
-serde_yaml = { workspace = true }
-
-# Shared backup contract (#1209, keep #776 / lumen #808): destination/policy
-# schema, BackupSink, local + s3 sinks, run_backup_once. Unconditional — the
-# schema types and the local sink are cheap; only the HTTP fetch path of
-# `relay backup` needs the `backup` feature (reqwest + the lib's s3 sink).
-service-backup = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-# Shared peer-mTLS material loading (#1209, lumen #971): PeerTlsConfig env
-# contract + PEM loaders + rustls builders + the Once-guarded crypto-provider
-# install. Unconditional (links rustls in every build) — src/tls/peer.rs is the
-# thin RELAY_PEER-prefix adapter and serve validates material in replica mode.
-peer-tls = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-# rustls config types surfaced by the peer_tls builder passthroughs. Always in
-# the graph via peer-tls, so no longer optional (the private rustls-provider
-# feature indirection collapsed; src/tls.rs installs unconditionally).
-rustls = "0.23"
-# Shared polyglot OpenAPI client codegen (#1209, keep #777): `relay spec gen`
-# generates ts/py/rust clients from relay's own utoipa document — offline.
-openapi-codegen = { git = "https://github.com/faberline/core", tag = "v0.4.14", version = "0.5" }
-# HTTP client for `relay backup`'s snapshot fetch (feature `backup` only; the
-# serving image stays reqwest-free by default). Also a dev-dependency for the
-# transport tests either way.
-reqwest = { workspace = true, optional = true }
-
-[build-dependencies]
-# Stamp RELAY_GIT_SHA / RELAY_BUILT_AT / RELAY_TARGET for cli-std's ToolInfo.
-build-stamp = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-
-[features]
-default = []
-# self-update / issue — enable the online (HTTPS) paths of the shared CLI-ops
-# lib. Offline builds still ship both commands (`upgrade --check` / the issue
-# create dry-run + pre-filled-URL fallback); release builds enable them.
-self-update = ["cli-std/online"]
-issue = ["cli-std/online"]
-# operator — the shared core/service-k8s scaffold: a RelaySpec CRD + ManagedService
-# render, driven by service_k8s::run. Ships the `relay k8s operator run` controller
-# and the CRD generator; pulls kube-rs, so the serving image stays kube-free
-# unless built with this feature (#1208).
-operator = ["dep:kube", "dep:k8s-openapi", "dep:schemars", "dep:service-k8s"]
-# backup — `relay backup` (#1209): fetches a snapshot from a running node's
-# `GET /admin/backup` over HTTP and ships it to a core/service-backup
-# destination sink (lumen #808 layout). Enables the lib's s3 sink; file://
-# always works. The endpoint itself is always served — this gates only the
-# CLI verb's HTTP fetch path.
-backup = ["dep:reqwest", "service-backup/http-client", "service-backup/s3"]
-# otel — enable OTLP trace export in the shared service-http tracing shell.
-# The serve flag remains available without this feature and fails clearly if
-# an endpoint is configured in a binary that was not built with OTLP support.
-otel = ["service-http/otlp"]
-# NOTE: the former private `rustls-provider` feature is gone — peer-tls
-# links rustls unconditionally now (#1209), so src/tls.rs installs the
-# process-level crypto provider in every build.
-
-[dev-dependencies]
-# Deploy-CLI render round-trip assertions (tests/it/deploy_cli.rs, tests/it/operator.rs).
-serde_yaml = { workspace = true }
-tempfile = "3"
-criterion = "0.5"
-# Competitor work-queue comparison harness (examples/bench_compare.rs).
-async-nats = { workspace = true }
-redis = { version = "0.27", features = ["tokio-comp"] }
-lapin = "2.5"
-transport-h2c = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-# The deterministic consensus simulation (tests/it/raft_core.rs) drives the core
-# directly; production code reaches raft only through raft-runtime.
-raft-core = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-# h2c test clients for the transport/cluster integration tests.
-reqwest = { workspace = true }
-rcgen = "0.13"
-tower = { workspace = true, features = ["util"] }
-
-[[example]]
-name = "bench_compare"
-path = "examples/bench_compare.rs"
 # HANDWRITE-END

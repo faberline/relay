@@ -1,0 +1,16 @@
+[package]
+name = "relay-access"
+description = "relay access: the adapter over the shared service-auth bearer contract"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+service-auth.workspace = true
+
+[lints]
+workspace = true
