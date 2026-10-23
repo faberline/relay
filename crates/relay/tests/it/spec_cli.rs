@@ -225,7 +225,7 @@ fn shared_llm_topic_surface_conformance() {
     assert!(
         json_outline["version"]
             .as_str()
-            .map_or(false, |v| !v.is_empty()),
+            .is_some_and(|v| !v.is_empty()),
         "version must be non-empty"
     );
     let topics_arr = json_outline["topics"]
@@ -244,7 +244,7 @@ fn shared_llm_topic_surface_conformance() {
         .expect("relay llm --topic http-api --format json emits JSON");
     assert_eq!(json_topic["topic"], "http-api");
     assert!(
-        json_topic["body"].as_str().map_or(false, |b| !b.is_empty()),
+        json_topic["body"].as_str().is_some_and(|b| !b.is_empty()),
         "body must be non-empty"
     );
 
