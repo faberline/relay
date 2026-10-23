@@ -247,8 +247,7 @@ async fn ordered_log_queue_and_raft_feature_breadth() {
                 .unwrap()
                 .expect("log entry present");
             assert_eq!(
-                entry.seq,
-                seq,
+                entry.seq, seq,
                 "node {node_id} seq {seq}: entry sequence is strictly increasing and matches"
             );
             assert_eq!(
@@ -270,13 +269,11 @@ async fn ordered_log_queue_and_raft_feature_breadth() {
             .unwrap()
             .expect("lease granted");
         assert_eq!(
-            lease.seq,
-            seq,
+            lease.seq, seq,
             "node {replica} seq {seq}: lease granted in strict seq order"
         );
         assert_eq!(
-            lease.executor_node,
-            replica as u64,
+            lease.executor_node, replica as u64,
             "node {replica} seq {seq}: executor node matches replica"
         );
 
@@ -291,8 +288,7 @@ async fn ordered_log_queue_and_raft_feature_breadth() {
         );
         let watermark = committed.expect("committed offset watermark");
         assert_eq!(
-            watermark.committed_seq,
-            seq,
+            watermark.committed_seq, seq,
             "node {replica} seq {seq}: committed_seq watermark advanced to {seq}"
         );
     }
@@ -323,8 +319,7 @@ async fn ordered_log_queue_and_raft_feature_breadth() {
 
     let new_leader = c.wait_leader().await;
     assert_ne!(
-        new_leader,
-        old_leader,
+        new_leader, old_leader,
         "node {new_leader} seq 8: new leader differs from killed leader {old_leader}"
     );
 
@@ -384,8 +379,7 @@ async fn ordered_log_queue_and_raft_feature_breadth() {
             .unwrap()
             .expect("post-failover lease granted");
         assert_eq!(
-            lease.seq,
-            seq,
+            lease.seq, seq,
             "node {replica} seq {seq}: post-failover lease seq matches {seq}"
         );
         let (accepted, committed) = c
@@ -432,8 +426,7 @@ async fn ordered_log_queue_and_raft_feature_breadth() {
                 .unwrap()
                 .expect("post-failover log entry present");
             assert_eq!(
-                entry.seq,
-                seq,
+                entry.seq, seq,
                 "node {node_id} seq {seq}: post-failover entry seq is strictly increasing"
             );
             assert_eq!(
@@ -467,8 +460,7 @@ async fn ordered_log_queue_and_raft_feature_breadth() {
             .unwrap()
             .expect("learner entry present");
         assert_eq!(
-            entry.seq,
-            seq,
+            entry.seq, seq,
             "node 3 seq {seq}: learner log seq is strictly increasing and matches"
         );
         assert_eq!(
