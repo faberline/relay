@@ -284,5 +284,28 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual(self.writes, [])
 
 
+class ReconcileTests(unittest.TestCase):
+    def test_replacement_wake_reconciles_pr_b_even_when_event_only_names_c(self):
+        from argparse import Namespace
+        args = Namespace(repo='o/r', run_id=30, apply=False)
+        event = dict(event='pull_request', head_repository={'full_name': 'o/r'}, path=GATES[0]['path'], pull_requests=[{'number': 30}])
+        prs = [dict(number=n, body=f'Closes #{n}', head=dict(ref=f'issue/{n}', sha=str(n // 10) * 40, repo={'full_name': 'o/r'})) for n in (10, 20, 30)]
+        with patch.object(ci, 'api', return_value=event), patch.object(ci, 'pages', return_value=prs), patch.object(ci, 'process_head', return_value=0) as process:
+            self.assertEqual(ci.reconcile(args, {'workflows': GATES}), 0)
+        self.assertEqual([c.args[0].pr for c in process.call_args_list], [10, 20, 30])
+        self.assertTrue(all(c.kwargs == {'check_event': False} for c in process.call_args_list))
+
+    def test_one_stale_pr_does_not_prevent_other_pr_reconciliation(self):
+        from argparse import Namespace
+        args = Namespace(repo='o/r', run_id=30, apply=False)
+        event = dict(event='pull_request', head_repository={'full_name': 'o/r'}, path=GATES[0]['path'])
+        prs = [dict(number=n, body=f'Closes #{n}', head=dict(ref=f'issue/{n}', sha=SHA, repo={'full_name': 'o/r'})) for n in (10, 20)]
+        with patch.object(ci, 'api', return_value=event), patch.object(ci, 'pages', return_value=prs), patch.object(ci, 'process_head', side_effect=[RuntimeError('stale head'), 0]) as process:
+            with self.assertRaises(RuntimeError):
+                ci.reconcile(args, {'workflows': GATES})
+        self.assertEqual(process.call_count, 2)
+
+
+
 if __name__ == "__main__":
     unittest.main()
