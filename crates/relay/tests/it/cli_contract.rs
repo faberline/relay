@@ -62,4 +62,83 @@ fn offline_spec_and_three_client_languages_share_one_contract() {
         assert!(String::from_utf8_lossy(&generated.stdout).contains("next: done"));
     }
 }
+
+/// Write outputs: run `relay spec gen --lang rust --out <tempdir>` and one render verb with `--out <tempdir>`.
+/// Each exits 0, its stdout's last non-empty line is exactly `next: done`, and `assert_chainable(stdout)` returns `Ok`.
+#[test]
+fn next_markers_on_write_outputs_spec_gen() {
+    let out = tempfile::tempdir().expect("tempdir");
+    let output = relay(&[
+        "spec",
+        "gen",
+        "--lang",
+        "rust",
+        "--out",
+        out.path().to_str().expect("valid path"),
+    ]);
+    assert!(
+        output.status.success(),
+        "relay spec gen failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("valid utf8 stdout");
+    let last_non_empty = stdout
+        .lines()
+        .rfind(|line| !line.trim().is_empty())
+        .expect("non-empty stdout");
+    assert_eq!(last_non_empty, "next: done");
+    assert!(
+        cli_std::chainable::assert_chainable(stdout).is_ok(),
+        "assert_chainable failed for spec gen: {stdout}"
+    );
+}
+
+#[test]
+fn next_markers_on_write_outputs_deploy_render() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("relay.yaml");
+    let output = relay(&[
+        "k8s",
+        "instance",
+        "render",
+        "--profile",
+        "dev",
+        "--out",
+        out.to_str().expect("valid path"),
+    ]);
+    assert!(
+        output.status.success(),
+        "relay k8s instance render failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(out.is_file(), "expected rendered output file to exist");
+    let stdout = std::str::from_utf8(&output.stdout).expect("valid utf8 stdout");
+    let last_non_empty = stdout
+        .lines()
+        .rfind(|line| !line.trim().is_empty())
+        .expect("non-empty stdout");
+    assert_eq!(last_non_empty, "next: done");
+    assert!(
+        cli_std::chainable::assert_chainable(stdout).is_ok(),
+        "assert_chainable failed for k8s instance render with --out: {stdout}"
+    );
+}
+
+/// Stdout-only form: the same render verb without `--out` prints the artifact and no `next:` line,
+/// so the artifact stream stays unwrapped.
+#[test]
+fn stdout_only_render_verb_omits_next_marker() {
+    let output = relay(&["k8s", "instance", "render", "--profile", "dev"]);
+    assert!(
+        output.status.success(),
+        "relay k8s instance render stdout-only failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("valid utf8 stdout");
+    assert!(!stdout.is_empty(), "expected non-empty rendered artifact");
+    assert!(
+        !stdout.lines().any(|l| l.trim().starts_with("next:")),
+        "stdout-only render form must not contain next: marker lines: {stdout}"
+    );
+}
 // HANDWRITE-END

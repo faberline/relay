@@ -276,4 +276,97 @@ async fn run_backup_ships_snapshot_to_local_sink() {
     let snap: relay::EngineSnapshot = serde_json::from_slice(&artifact).unwrap();
     assert_eq!(snap.subjects[0].entries[0].message_id, "m-1");
 }
+
+/// Backup output, `#[cfg(feature = "backup")]`: start a node as `tests/it/backup.rs` does
+/// (`AppState::new(RelayServerConfig::ephemeral(), ..)` served on `127.0.0.1:0`, with the auth-off default),
+/// publish one message, then run the binary with `relay backup --url http://<addr> --dest file://<tempdir>`
+/// through `tokio::task::spawn_blocking`, so the in-process server keeps running. Assert exit 0, a snapshot
+/// file in the tempdir, the last non-empty stdout line exactly `next: done`, `assert_chainable(stdout)` is `Ok`,
+/// and the text before the marker parses as JSON. Use a `#[tokio::test(flavor = "multi_thread")]`.
+#[cfg(feature = "backup")]
+#[tokio::test(flavor = "multi_thread")]
+async fn backup_output_ends_with_next_done_marker() {
+    let (addr, state) = start_server().await;
+    state
+        .relay_handle()
+        .publish(
+            "jobs",
+            "m-1",
+            json!({"task": "t"}),
+            BTreeMap::new(),
+            Utc::now(),
+        )
+        .unwrap();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let url = format!("http://{addr}");
+    let dest = format!("file://{}", dir.path().display());
+
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_relay"))
+            .args(["backup", "--url", &url, "--dest", &dest])
+            .output()
+            .expect("run relay backup")
+    })
+    .await
+    .expect("spawn_blocking completed");
+
+    assert!(
+        output.status.success(),
+        "relay backup failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let entries: Vec<_> = std::fs::read_dir(dir.path())
+        .expect("read dest tempdir")
+        .filter_map(|e| e.ok())
+        .collect();
+    assert!(
+        !entries.is_empty(),
+        "expected snapshot file in dest tempdir"
+    );
+
+    let stdout = std::str::from_utf8(&output.stdout).expect("valid utf8 stdout");
+    let last_non_empty = stdout
+        .lines()
+        .rfind(|line| !line.trim().is_empty())
+        .expect("non-empty stdout");
+    assert_eq!(last_non_empty, "next: done");
+    assert!(
+        cli_std::chainable::assert_chainable(stdout).is_ok(),
+        "assert_chainable failed for relay backup: {stdout}"
+    );
+
+    let before_marker = match stdout.rfind("next: done") {
+        Some(pos) => &stdout[..pos],
+        None => stdout,
+    };
+    let json_val: serde_json::Value =
+        serde_json::from_str(before_marker.trim()).expect("text before marker parses as JSON");
+    assert!(json_val.is_object(), "backup result must be a JSON object");
+}
+
+/// Backup without the feature, `#[cfg(not(feature = "backup"))]`:
+/// `relay backup --url http://127.0.0.1:1 --dest file://<tempdir>` exits non-zero
+/// with stderr containing `compiled without backup support`.
+#[cfg(not(feature = "backup"))]
+#[test]
+fn backup_without_feature_fails_with_unsupported_message() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dest = format!("file://{}", dir.path().display());
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_relay"))
+        .args(["backup", "--url", "http://127.0.0.1:1", "--dest", &dest])
+        .output()
+        .expect("run relay backup");
+
+    assert!(
+        !output.status.success(),
+        "relay backup without feature must exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("compiled without backup support"),
+        "expected 'compiled without backup support' in stderr: {stderr}"
+    );
+}
 // HANDWRITE-END
