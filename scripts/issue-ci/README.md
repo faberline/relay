@@ -9,7 +9,7 @@ artifacts. One repository concurrency group serializes all reconciliations.
 AGY owns only todo → doing; after submission CI alone may set done/todo. A fresh
 review checks the same current head after qualification; no automatic merge.
 
-## Staged, blocked rollout
+## Failure handoff enabled after merge; done remains blocked
 
 The manifest inventories every existing ordinary PR CI job and all four exact GKE
 job identities (including nested reusable-workflow names). GKE names were verified
