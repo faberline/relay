@@ -430,4 +430,93 @@ async fn fresh_node_catches_up_via_install_snapshot() {
     }
     c.shutdown().await;
 }
+
+/// Observable oracle for capability claim `real-h2c-raft-cluster-smoke`:
+/// a three-node `RelayRaft` group on real h2c listeners elects one leader,
+/// commits a publish that every node's engine applies, rejects direct follower
+/// `/raft/publish` with 421 not-leader, and survives one leader kill with
+/// both committed messages intact on both survivors.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_h2c_raft_cluster_smoke() {
+    let _guard = CLUSTER_TEST_LOCK.lock().await;
+    let mut c = Cluster::prepare(3).await;
+    c.start_all(1024);
+
+    // Exactly one leader.
+    let leader = c.wait_leader().await;
+    let mut leaders = 0;
+    for (_, n) in c.live() {
+        if n.raft.is_leader().await {
+            leaders += 1;
+        }
+    }
+    assert_eq!(
+        leaders, 1,
+        "node {leader}: exactly one leader elected across group"
+    );
+
+    // Leader publish: outcome not deduped, converged to 1, present on all three nodes.
+    let (_, outcome) = c.raft(leader).publish(&cmd("m1")).await.unwrap();
+    let outcome = outcome.unwrap_or_else(|| panic!("node {leader}: leader claims apply outcome"));
+    assert!(
+        !outcome.deduped,
+        "node {leader}: publish outcome not deduped"
+    );
+    c.wait_converged(1).await;
+    for (i, _) in c.live() {
+        assert!(
+            c.message_ids(i).contains(&"m1".to_string()),
+            "node {i}: message_ids contains 'm1'"
+        );
+    }
+
+    // Direct POST to a follower's /raft/publish over h2c asserts 421 with error == "not-leader".
+    let follower = c.live().map(|(i, _)| i).find(|i| *i != leader).unwrap();
+    let resp = c
+        .client
+        .post(format!("{}/raft/publish", c.urls[&(follower as u64)]))
+        .body(serde_json::to_vec(&cmd("m-direct")).unwrap())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::MISDIRECTED_REQUEST,
+        "node {follower}: direct /raft/publish returns 421"
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["error"], "not-leader",
+        "node {follower}: direct /raft/publish error is not-leader"
+    );
+
+    // Kill the leader, wait_leader returns a different node, publish commits,
+    // and both messages are in message_ids on both survivors.
+    c.kill(leader).await;
+    let new_leader = c.wait_leader().await;
+    assert_ne!(
+        new_leader, leader,
+        "node {new_leader}: new leader differs from killed leader {leader}"
+    );
+    let (_, out) = c.raft(new_leader).publish(&cmd("m2")).await.unwrap();
+    let out = out.unwrap_or_else(|| panic!("node {new_leader}: second publish outcome claimed"));
+    assert!(
+        !out.deduped,
+        "node {new_leader}: second publish outcome not deduped"
+    );
+    c.wait_converged(2).await;
+
+    for (i, _) in c.live() {
+        let ids = c.message_ids(i);
+        assert!(
+            ids.contains(&"m1".to_string()),
+            "survivor node {i}: message_ids contains 'm1'"
+        );
+        assert!(
+            ids.contains(&"m2".to_string()),
+            "survivor node {i}: message_ids contains 'm2'"
+        );
+    }
+    c.shutdown().await;
+}
 // HANDWRITE-END
