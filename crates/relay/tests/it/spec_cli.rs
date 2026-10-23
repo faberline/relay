@@ -182,4 +182,43 @@ fn llm_operations_topic_documents_the_new_surfaces() {
         );
     }
 }
+
+/// R1 / AC3: raw `relay spec` artifact streams stay unwrapped: stdout holds the
+/// artifact bytes only, no line starts with `next:`, and stderr is empty (WI #6).
+#[test]
+fn raw_spec_artifact_streams_stay_unwrapped() {
+    for args in [
+        &["spec"][..],
+        &["spec", "--format", "openapi-yaml"][..],
+        &["spec", "--format", "json-schema"][..],
+    ] {
+        let out = run(args);
+        assert!(
+            out.status.success(),
+            "`relay {}` failed with status {:?}: {}",
+            args.join(" "),
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            out.stderr.is_empty(),
+            "`relay {}` expected empty stderr, got: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8(out.stdout).expect("utf8 stdout");
+        assert!(
+            !stdout.is_empty(),
+            "`relay {}` emitted empty stdout",
+            args.join(" ")
+        );
+        for line in stdout.lines() {
+            assert!(
+                !line.starts_with("next:"),
+                "`relay {}` stdout contained terminal marker line `{line}`",
+                args.join(" ")
+            );
+        }
+    }
+}
 // HANDWRITE-END
