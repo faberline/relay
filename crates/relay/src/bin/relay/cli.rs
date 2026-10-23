@@ -120,6 +120,15 @@ mod tests {
             Some(Command::Llm(_))
         ));
         assert!(matches!(
+            Cli::try_parse_from(["relay", "llm", "--topic", "operations"])
+                .unwrap()
+                .cmd,
+            Some(Command::Llm(_))
+        ));
+        assert!(
+            Cli::try_parse_from(["relay", "llm", "operations", "--topic", "operations"]).is_err()
+        );
+        assert!(matches!(
             Cli::try_parse_from(["relay", "upgrade", "--check"])
                 .unwrap()
                 .cmd,
