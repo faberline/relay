@@ -143,6 +143,20 @@ mod tests {
                 .cmd,
             Some(Command::Issue(_))
         ));
+        assert!(matches!(
+            Cli::try_parse_from([
+                "relay",
+                "issue",
+                "comment",
+                "42",
+                "--dry-run",
+                "still",
+                "broken"
+            ])
+            .unwrap()
+            .cmd,
+            Some(Command::Issue(_))
+        ));
         // R2: relay-server's env knobs surface as flags on the bare path.
         let cli = Cli::try_parse_from(["relay", "--bind", "127.0.0.1:0", "--data-dir", "/tmp/x"])
             .unwrap();
@@ -175,6 +189,59 @@ mod tests {
         assert_eq!(cli.serve.peer_service, "relay");
         let cli = Cli::try_parse_from(["relay", "--peer-service", "relay-peer"]).unwrap();
         assert_eq!(cli.serve.peer_service, "relay-peer");
+    }
+
+    /// WI #5: shared upgrade/issue surface:
+    /// - `relay upgrade --check --version 0.4.3` and `relay upgrade --tag relay@0.4.3`
+    ///   both parse with `tag == Some(..)`.
+    /// - `relay issue comment 42 --dry-run still broken` parses to the `Comment` verb with number 42.
+    #[test]
+    fn shared_upgrade_issue_parse_surface() {
+        let up_ver = Cli::try_parse_from(["relay", "upgrade", "--check", "--version", "0.4.3"])
+            .expect("parse upgrade --version");
+        match up_ver.cmd {
+            Some(Command::Upgrade(args)) => {
+                assert!(args.check);
+                assert_eq!(args.tag.as_deref(), Some("0.4.3"));
+            }
+            other => panic!("expected Upgrade, got {other:?}"),
+        }
+
+        let up_tag = Cli::try_parse_from(["relay", "upgrade", "--tag", "relay@0.4.3"])
+            .expect("parse upgrade --tag");
+        match up_tag.cmd {
+            Some(Command::Upgrade(args)) => {
+                assert_eq!(args.tag.as_deref(), Some("relay@0.4.3"));
+            }
+            other => panic!("expected Upgrade, got {other:?}"),
+        }
+
+        let issue_comment = Cli::try_parse_from([
+            "relay",
+            "issue",
+            "comment",
+            "42",
+            "--dry-run",
+            "still",
+            "broken",
+        ])
+        .expect("parse issue comment");
+        match issue_comment.cmd {
+            Some(Command::Issue(issue_args)) => match issue_args.cmd {
+                crate::issue::IssueCommand::Comment(args) => {
+                    assert_eq!(args.number, 42);
+                    assert!(args.dry_run);
+                    assert_eq!(args.message, vec!["still", "broken"]);
+                }
+                other => panic!("expected Comment verb, got {other:?}"),
+            },
+            other => panic!("expected Issue, got {other:?}"),
+        }
+
+        // Root `relay --version` prints binary version (clap DisplayVersion).
+        let root_ver = Cli::try_parse_from(["relay", "--version"]).unwrap_err();
+        assert_eq!(root_ver.kind(), clap::error::ErrorKind::DisplayVersion);
+        assert!(root_ver.to_string().contains(env!("CARGO_PKG_VERSION")));
     }
 
     /// #1208: `relay k8s crd/operator/instance` verbs parse with their
