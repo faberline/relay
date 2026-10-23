@@ -380,24 +380,20 @@ fn raw_deploy_artifact_streams_stay_unwrapped() {
         );
 
         // Compare file bytes against raw run stdout bytes.
-        let file_bytes = if out_file.is_file() {
-            std::fs::read(&out_file).unwrap_or_else(|e| {
-                panic!(
-                    "`relay {}` failed to read expected output file {}: {e}",
-                    out_args.join(" "),
-                    out_file.display()
-                )
-            })
+        let target_file = if out_file.is_file() {
+            out_file.clone()
+        } else if out_file.is_dir() && out_file.join(default_file).is_file() {
+            out_file.join(default_file)
         } else {
-            let fallback = dir.path().join(default_file);
-            std::fs::read(&fallback).unwrap_or_else(|e| {
-                panic!(
-                    "`relay {}` failed to read default_file {}: {e}",
-                    out_args.join(" "),
-                    fallback.display()
-                )
-            })
+            dir.path().join(default_file)
         };
+        let file_bytes = std::fs::read(&target_file).unwrap_or_else(|e| {
+            panic!(
+                "`relay {}` failed to read expected output file {}: {e}",
+                out_args.join(" "),
+                target_file.display()
+            )
+        });
         assert_eq!(
             file_bytes,
             raw_stdout.as_bytes(),
