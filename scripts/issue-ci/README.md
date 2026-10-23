@@ -1,7 +1,7 @@
 # CI lifecycle handoff
 
-`handoff.py` is vendored unchanged from faberline/aw commit `84e9b72b4a63cc30b47449a2e321981525fa9c34`,
-`plugins/faberline/skills/issue-ci/scripts/handoff.py`. SHA-256: `1abb5570032eaf294a50c5fa0bfb9ae7edd1db7e3f0a98a1f56601720916caf1`.
+`handoff.py` is vendored unchanged from faberline/aw commit `67af8d020df3ca2ec4b064289408cfb0c2f8b299`,
+`plugins/faberline/skills/issue-ci/scripts/handoff.py`. SHA-256: `c67533b39d45ad62d407af3748856be396941647c349b63464424fa6aff1c198`.
 
 The privileged workflow checks out only the trusted default branch with no persisted
 credentials. It reads the trusted manifest and GitHub metadata, never PR code or
@@ -18,13 +18,21 @@ workflows/jobs must succeed for the current PR head and latest run attempt. Miss
 skipped, cancelled and pending gates never pass. Failures retain exact run/job links;
 the controller journals/deduplicates handoffs and preserves other issue labels.
 
-`qualification_blockers` deliberately prevents **all lifecycle mutations** until a
-reviewed affected unit/functional/e2e/performance contract and docs-only applicability
-policy is approved. The current `relay-ci` runs format/lint, workspace unit/integration
-tests and release-contract checks. GKE `raft_failover` is path filtered and only one e2e
-suite. It does not prove all functional/e2e or performance qualification; no automatic
-measured performance gate exists. A wiring-only PR does not trigger this GKE workflow.
-No missing coverage is treated as passing. No existing test triggers are expanded.
+The explicit `lifecycle_mode: failure-only` permits a genuine failure of any
+configured current-head gate to return an open `doing` issue to `todo`, with
+concise failure and exact run/job links. Other labels and existing `done` or
+unclaimed `todo` issues are preserved. Success, missing, pending, cancelled or
+skipped evidence produces no issue mutation. All-green evidence still cannot
+produce `done`, even if someone accidentally clears blockers. The policy guard
+imports the shared `load_config` and `evaluate_policy` APIs, refuses old controllers
+and full activation, and requires an explicit nonempty blockers list.
+
+The nonempty `qualification_blockers` retain the incomplete qualification decision.
+The current `relay-ci` runs format/lint, workspace unit/integration tests and
+release-contract checks. Path-filtered GKE covers only one e2e suite; it does not
+prove all affected functional/e2e or performance qualification. No automatic
+measured performance gate exists. Wiring-only PRs do not trigger GKE. No missing
+coverage is treated as passing and no existing test triggers are expanded.
 
 Resolving blockers requires a separately reviewed policy/coverage decision; do not
 clear them merely because the inventoried jobs are green. Product releases still

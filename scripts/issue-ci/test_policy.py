@@ -48,15 +48,36 @@ class ConsumerPolicyTests(unittest.TestCase):
                     missing[path] = snapshots[path][0], jobs
                     self.assertEqual(handoff.evaluate(gates, missing)[0], 'pending')
 
-    def test_current_policy_and_missing_blocker_decision_refuse(self):
-        with self.assertRaises(RuntimeError):
-            policy.check(ROOT / '.github/issue-ci-required-gates.json')
+    def test_current_failure_only_policy_is_valid(self):
+        self.assertEqual(policy.check(ROOT / '.github/issue-ci-required-gates.json'), self.config)
+        self.assertEqual(self.config['lifecycle_mode'], 'failure-only')
+        self.assertTrue(self.config['qualification_blockers'])
+
+    def test_guard_refuses_full_or_missing_policy_and_old_controller(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'policy.json'
-            for blockers in (None, 'approved', ['missing coverage']):
-                path.write_text(json.dumps(dict(workflows=self.config['workflows'], qualification_blockers=blockers)))
+            for mode in ('full', 'invalid', None):
+                config = dict(self.config, lifecycle_mode=mode)
+                path.write_text(json.dumps(config))
                 with self.assertRaises(RuntimeError): policy.check(path)
-            path.write_text(json.dumps(dict(workflows=self.config['workflows'], qualification_blockers=[])))
-            policy.check(path)
-            path.write_text(json.dumps(dict(workflows=[], qualification_blockers=[])))
+            for blockers in (None, 'approved', [], [1], ['']):
+                path.write_text(json.dumps(dict(self.config, qualification_blockers=blockers)))
+                with self.assertRaises(RuntimeError): policy.check(path)
+            config = dict(self.config); config.pop('qualification_blockers')
+            path.write_text(json.dumps(config))
             with self.assertRaises(RuntimeError): policy.check(path)
+            with patch.object(policy, 'load_controller', return_value=object()):
+                with self.assertRaisesRegex(RuntimeError, 'policy-aware controller'):
+                    policy.check(path)
+
+    def test_real_gate_failure_only_and_success_never_done(self):
+        snapshots = {}
+        for i, gate in enumerate(self.config['workflows']):
+            run = dict(id=i, status='completed', conclusion='success', html_url=f'https://github.com/o/r/actions/runs/{i}')
+            snapshots[gate['path']] = run, [dict(name=name, status='completed', conclusion='success', html_url=run['html_url'] + '/job/1') for name in gate['jobs']]
+        self.assertEqual(handoff.evaluate_policy(self.config, snapshots)[0], 'pending')
+        path = self.config['workflows'][0]['path']
+        snapshots[path][1][0]['conclusion'] = 'failure'
+        state, reasons, _ = handoff.evaluate_policy(self.config, snapshots)
+        self.assertEqual(state, 'todo')
+        self.assertTrue(any(snapshots[path][1][0]['html_url'] in reason for reason in reasons))
