@@ -313,9 +313,9 @@ async fn served_openapi_covers_every_data_plane_route() {
     // in the served paths, so a new route cannot ship undocumented.
     let server_src = include_str!("../../../../crates/relay-queue/src/server.rs");
     let mut server_routes = Vec::new();
-    for part in server_src.split(".route(\"") {
+    for part in server_src.split(".route(\"").skip(1) {
         if let Some((route_path, _)) = part.split_once('"') {
-            if route_path.starts_with('/') {
+            if route_path.starts_with('/') && !route_path.contains(char::is_whitespace) {
                 server_routes.push(route_path);
             }
         }
