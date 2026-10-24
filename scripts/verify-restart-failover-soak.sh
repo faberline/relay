@@ -134,6 +134,13 @@ mkdir -p "$EVIDENCE_DIR/soak_raw"
 WORK_TMP="$(mktemp -d "${TMPDIR:-/tmp}/relay-verify-soak.XXXXXX")"
 TRACKED_PIDS=()
 CLEANED_PATHS=()
+AW_DIR_CREATED=false
+
+# Ensure .aw project root directory exists for AW EC test root discovery
+if [[ ! -d "$REPO_ROOT/.aw" ]]; then
+  mkdir -p "$REPO_ROOT/.aw"
+  AW_DIR_CREATED=true
+fi
 
 cleanup() {
   local ec=$?
@@ -147,6 +154,10 @@ cleanup() {
   if [[ -n "${WORK_TMP:-}" && -d "$WORK_TMP" ]]; then
     CLEANED_PATHS+=("$WORK_TMP")
     rm -rf "$WORK_TMP"
+  fi
+  if [[ "$AW_DIR_CREATED" == "true" && -d "$REPO_ROOT/.aw" ]]; then
+    CLEANED_PATHS+=("$REPO_ROOT/.aw")
+    rm -rf "$REPO_ROOT/.aw"
   fi
   exit "$ec"
 }
