@@ -111,7 +111,7 @@ async fn reference_worker_drives_lease_heartbeat_ack_over_h2c() {
 
 // #108: the worker-facing verbs are present in the served OpenAPI contract.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn openapi_lists_worker_facing_verbs() {
+async fn worker_lease_heartbeat_ack_route_list() {
     let addr = start_server().await;
     let doc = h2c()
         .get(format!("http://{addr}/openapi.json"))
@@ -126,7 +126,9 @@ async fn openapi_lists_worker_facing_verbs() {
         "/v1/{subject}/consume",
         // Deprecated polling verbs, retained for the direct-worker mode (#463).
         "/v1/{subject}/lease",
+        "/v1/{subject}/lease-batch",
         "/v1/{subject}/ack",
+        "/v1/{subject}/ack-batch",
         "/v1/{subject}/heartbeat",
     ] {
         assert!(
@@ -134,5 +136,22 @@ async fn openapi_lists_worker_facing_verbs() {
             "OpenAPI must advertise {path} to workers"
         );
     }
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&doc).expect("served OpenAPI must be valid JSON");
+    for path in [
+        "/v1/{subject}/lease",
+        "/v1/{subject}/lease-batch",
+        "/v1/{subject}/ack",
+        "/v1/{subject}/ack-batch",
+        "/v1/{subject}/heartbeat",
+    ] {
+        assert!(
+            parsed["paths"][path]["post"].is_object(),
+            "OpenAPI path {path} must serve a POST operation"
+        );
+    }
+
+    println!("worker lease heartbeat ack route list");
 }
 // HANDWRITE-END
