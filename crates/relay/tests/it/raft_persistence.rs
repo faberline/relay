@@ -378,6 +378,7 @@ async fn three_node_follower_restart_rejoins_without_double_apply() {
             "node {leader}: expected count 1 live pair publish outcome not deduped"
         );
     }
+    c.wait_converged(5).await;
     for (i, _) in c.live() {
         assert_eq!(
             c.raft(i).relay().log_len("s").unwrap(),
