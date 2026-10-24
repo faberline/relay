@@ -22,19 +22,9 @@ cmd = [
   "-p",
   "relay",
   "--test",
-  "auth",
-  "--test",
-  "service_admission",
-  "--test",
-  "raft_peer_mtls",
-  "--test",
-  "direct_k8s_assets",
+  "it",
   "--no-run",
 ]
-
-[[setup]]
-id = "build-service-auth-security-ec-tests"
-cmd = ["cargo", "test", "-p", "service-auth", "--lib", "--no-run"]
 
 [[setup]]
 id = "build-relay-measured-performance-gate"
@@ -45,7 +35,7 @@ cmd = [
   "-p",
   "relay",
   "--test",
-  "measured_performance",
+  "it",
   "--no-run",
 ]
 
