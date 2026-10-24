@@ -440,4 +440,87 @@ async fn oversized_body_rejection_renders_structured_413_envelope() {
     }
 }
 
+/// Issue #25: close capability claim `service-http-standard-probe-routes`.
+/// All five standard probe endpoints answer over h2c prior-knowledge HTTP/2,
+/// and after drain begins, `/readyz` flips to 503 while the other four probe
+/// endpoints continue answering 200.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn service_http_standard_probe_routes_hold_during_drain() {
+    let (addr, state) = start_server().await;
+    let client = h2c_client();
+
+    let probes = [
+        ("/healthz", "ok"),
+        ("/readyz", "ok"),
+        ("/metrics", "relay_publish_requests_total"),
+        ("/openapi.json", "/v1/{subject}/publish"),
+        ("/docs", "swagger-ui"),
+    ];
+
+    for (path, needle) in probes {
+        let resp = client.get(url(addr, path)).send().await.unwrap();
+        assert_eq!(
+            resp.version(),
+            reqwest::Version::HTTP_2,
+            "{path} before drain: expected HTTP/2"
+        );
+        assert_eq!(
+            resp.status(),
+            200,
+            "{path} before drain: expected status 200"
+        );
+        let body = resp.text().await.unwrap();
+        assert!(
+            body.contains(needle),
+            "{path} before drain: body must contain {needle:?}"
+        );
+    }
+
+    state.start_drain();
+
+    let readyz = client.get(url(addr, "/readyz")).send().await.unwrap();
+    assert_eq!(
+        readyz.version(),
+        reqwest::Version::HTTP_2,
+        "/readyz after drain: expected HTTP/2"
+    );
+    assert_eq!(
+        readyz.status(),
+        503,
+        "/readyz after drain: expected status 503"
+    );
+    let readyz_body = readyz.text().await.unwrap();
+    assert_eq!(
+        readyz_body, "draining",
+        "/readyz after drain: expected body draining"
+    );
+
+    for (path, needle) in [
+        ("/healthz", "ok"),
+        ("/metrics", "relay_publish_requests_total"),
+        ("/openapi.json", "/v1/{subject}/publish"),
+        ("/docs", "swagger-ui"),
+    ] {
+        let resp = client.get(url(addr, path)).send().await.unwrap();
+        assert_eq!(
+            resp.version(),
+            reqwest::Version::HTTP_2,
+            "{path} after drain: expected HTTP/2"
+        );
+        assert_eq!(
+            resp.status(),
+            200,
+            "{path} after drain: expected status 200"
+        );
+        let body = resp.text().await.unwrap();
+        assert!(
+            body.contains(needle),
+            "{path} after drain: body must contain {needle:?}"
+        );
+        if path == "/healthz" {
+            assert_eq!(body, "ok", "/healthz after drain: expected body ok");
+        }
+    }
+}
+
 // HANDWRITE-END
