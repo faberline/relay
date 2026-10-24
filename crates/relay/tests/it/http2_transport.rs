@@ -35,6 +35,19 @@ async fn start_server() -> (SocketAddr, AppState) {
     (addr, state)
 }
 
+async fn start_server_with_shutdown(
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+) -> (SocketAddr, AppState, tokio::task::JoinHandle<()>) {
+    let state = AppState::new(RelayServerConfig::ephemeral(), 8 * 1024 * 1024);
+    let app = router(state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(service_http::serve(listener, app, async move {
+        let _ = shutdown_rx.await;
+    }));
+    (addr, state, handle)
+}
+
 fn h2c_client() -> reqwest::Client {
     reqwest::Client::builder()
         .http2_prior_knowledge()
@@ -250,6 +263,135 @@ async fn readyz_flips_to_503_on_drain() {
     let draining = client.get(url(addr, "/readyz")).send().await.unwrap();
     assert_eq!(draining.status(), 503);
     assert_eq!(draining.text().await.unwrap(), "draining");
+}
+
+/// graceful drain readiness: close capability claim `graceful-drain-readiness`.
+///
+/// Proves that `/readyz` flips to 503 while `/healthz` stays 200 and data-plane
+/// operations over h2c continue to serve during graceful drain, until the shutdown
+/// future completes, after which the serve loop exits and connections are refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn graceful_drain_readiness_keeps_serving_until_shutdown() {
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let (addr, state, handle) = start_server_with_shutdown(shutdown_rx).await;
+    let client = reqwest::Client::new();
+    let h2 = h2c_client();
+
+    // Before drain: /readyz is 200 and /healthz is 200.
+    let ready = client.get(url(addr, "/readyz")).send().await.unwrap();
+    assert_eq!(
+        ready.status(),
+        200,
+        "graceful drain readiness: /readyz must return 200 before drain"
+    );
+    let health = client.get(url(addr, "/healthz")).send().await.unwrap();
+    assert_eq!(
+        health.status(),
+        200,
+        "graceful drain readiness: /healthz must return 200 before drain"
+    );
+
+    // After state.start_drain() and before shutdown: /readyz is 503 with body draining,
+    // /healthz is still 200, and a publish plus a lease and ack over h2c still succeed.
+    state.start_drain();
+
+    let draining_ready = client.get(url(addr, "/readyz")).send().await.unwrap();
+    assert_eq!(
+        draining_ready.status(),
+        503,
+        "graceful drain readiness: /readyz must return 503 while draining"
+    );
+    let draining_body = draining_ready.text().await.unwrap();
+    assert_eq!(
+        draining_body, "draining",
+        "graceful drain readiness: /readyz body must be 'draining'"
+    );
+
+    let draining_health = client.get(url(addr, "/healthz")).send().await.unwrap();
+    assert_eq!(
+        draining_health.status(),
+        200,
+        "graceful drain readiness: /healthz must remain 200 while draining"
+    );
+
+    let pub_outcome = publish(&h2, addr, "drain-q", "m0").await;
+    assert_eq!(
+        pub_outcome["seq"], 0,
+        "graceful drain readiness: publish over h2c seq must be 0 while draining"
+    );
+    assert_eq!(
+        pub_outcome["deduped"], false,
+        "graceful drain readiness: publish over h2c deduped must be false while draining"
+    );
+
+    let lease_resp: LeaseResponse = h2
+        .post(url(addr, "/v1/drain-q/lease"))
+        .json(&LeaseRequest {
+            consumer_id: "c1".into(),
+        })
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        lease_resp.lease.is_some(),
+        "graceful drain readiness: lease over h2c must be granted while draining"
+    );
+    let lease = lease_resp.lease.unwrap();
+    assert_eq!(
+        lease.seq, 0,
+        "graceful drain readiness: lease seq must be 0 while draining"
+    );
+    assert_eq!(
+        lease.attempt, 1,
+        "graceful drain readiness: lease attempt must be 1 while draining"
+    );
+
+    let ack: AckResponse = h2
+        .post(url(addr, "/v1/drain-q/ack"))
+        .json(&json!({ "lease_id": lease.lease_id }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        ack.acked,
+        "graceful drain readiness: ack over h2c must be true while draining"
+    );
+    assert_eq!(
+        ack.committed_seq,
+        Some(0),
+        "graceful drain readiness: ack committed_seq must be Some(0) while draining"
+    );
+
+    // After sending on the oneshot: the serve JoinHandle completes within a bounded
+    // tokio::time::timeout (5 s), and a new connection to addr is then refused or fails.
+    let send_ok = shutdown_tx.send(());
+    assert!(
+        send_ok.is_ok(),
+        "graceful drain readiness: sending shutdown on oneshot must succeed"
+    );
+
+    let serve_completion = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+    assert!(
+        serve_completion.is_ok(),
+        "graceful drain readiness: serve JoinHandle must complete within 5s timeout"
+    );
+    let join_result = serve_completion.unwrap();
+    assert!(
+        join_result.is_ok(),
+        "graceful drain readiness: serve task must join cleanly"
+    );
+
+    let connect_result = tokio::net::TcpStream::connect(addr).await;
+    assert!(
+        connect_result.is_err(),
+        "graceful drain readiness: new connection to addr must be refused or fail after shutdown, got: {connect_result:?}"
+    );
 }
 
 /// #1205 AC2: an HTTP/2 prior-knowledge (h2c, via core/transport-h2c `h2c_client`)
