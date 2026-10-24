@@ -517,6 +517,7 @@ async fn real_h2c_raft_cluster_smoke() {
             "survivor node {i}: message_ids contains 'm2'"
         );
     }
+    println!("real h2c raft cluster smoke");
     c.shutdown().await;
 }
 // HANDWRITE-END
