@@ -212,6 +212,28 @@ async fn probe_surface_answers_on_serve_port() {
     }
 }
 
+/// #24: validate that the served `/openapi.json` paths key set equals the `relay spec` key set.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn served_openapi_paths_match_offline_spec() {
+    let (addr, _state) = start_server().await;
+    let client = reqwest::Client::new();
+    let resp = client.get(url(addr, "/openapi.json")).send().await.unwrap();
+    assert_eq!(resp.status(), 200, "GET /openapi.json");
+    let served: serde_json::Value = resp.json().await.expect("valid JSON from /openapi.json");
+    let served_paths: std::collections::BTreeSet<String> = served["paths"]
+        .as_object()
+        .expect("paths object in served openapi")
+        .keys()
+        .cloned()
+        .collect();
+
+    let spec_paths = crate::spec_cli::relay_spec_paths();
+    assert_eq!(
+        served_paths, spec_paths,
+        "served /openapi.json paths key set must equal relay spec key set"
+    );
+}
+
 /// #2490: every response carries a `Server-Timing: app;dur=<ms>` baseline
 /// from the shared `service_http::server_timing_middleware` layer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
