@@ -293,4 +293,208 @@ fn file_render_ends_with_explicit_terminal_marker() {
     assert!(out.is_file());
     assert!(output.lines().any(|line| line == "next: done"));
 }
+
+#[test]
+fn dockerfile_render_version_normalization_and_default_replacement() {
+    let committed_release = include_str!("../../../../Dockerfile.release");
+    let default_arg_line = committed_release
+        .lines()
+        .find(|l| l.starts_with("ARG RELAY_VERSION="))
+        .expect("Dockerfile.release has ARG RELAY_VERSION=");
+    let default_tag = default_arg_line
+        .strip_prefix("ARG RELAY_VERSION=")
+        .expect("strip ARG RELAY_VERSION=");
+    let default_version = default_tag.strip_prefix("relay@").unwrap_or(default_tag);
+
+    let rendered_bare = stdout(&[
+        "dockerfile",
+        "render",
+        "--variant",
+        "release",
+        "--version",
+        "9.9.9",
+    ]);
+    let rendered_prefixed = stdout(&[
+        "dockerfile",
+        "render",
+        "--variant",
+        "release",
+        "--version",
+        "relay@9.9.9",
+    ]);
+
+    assert_eq!(
+        rendered_bare, rendered_prefixed,
+        "--version 9.9.9 and --version relay@9.9.9 must render identical output"
+    );
+
+    for rendered in [&rendered_bare, &rendered_prefixed] {
+        let mut saw_arg = false;
+        let mut saw_tag = false;
+        let mut saw_build_arg = false;
+        for line in rendered.lines() {
+            if line.starts_with("ARG RELAY_VERSION=") {
+                saw_arg = true;
+                assert!(
+                    !line.contains(default_version),
+                    "ARG RELAY_VERSION= must not contain default {default_version}: {line}"
+                );
+            } else if line.contains("-t relay:") {
+                saw_tag = true;
+                assert!(
+                    !line.contains(default_version),
+                    "-t relay: must not contain default {default_version}: {line}"
+                );
+            } else if line.contains("--build-arg RELAY_VERSION=") {
+                saw_build_arg = true;
+                assert!(
+                    !line.contains(default_version),
+                    "--build-arg RELAY_VERSION= must not contain default {default_version}: {line}"
+                );
+            }
+        }
+        assert!(saw_arg, "rendered output must contain ARG RELAY_VERSION=");
+        assert!(saw_tag, "rendered output must contain -t relay:");
+        assert!(
+            saw_build_arg,
+            "rendered output must contain --build-arg RELAY_VERSION="
+        );
+    }
+}
+
+#[test]
+fn dockerfile_render_out_dir_writes_expected_files_and_terminal_marker() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let source_stdout = stdout(&["dockerfile", "render", "--variant", "source"]);
+    let out_source = stdout(&[
+        "dockerfile",
+        "render",
+        "--variant",
+        "source",
+        "--out",
+        dir.path().to_str().unwrap(),
+    ]);
+    let written_source = dir.path().join("Dockerfile");
+    assert!(
+        written_source.is_file(),
+        "expected <dir>/Dockerfile to be written"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&written_source).unwrap(),
+        source_stdout,
+        "written Dockerfile matches stdout render"
+    );
+    assert!(
+        out_source.lines().any(|l| l == "next: done"),
+        "stdout must contain 'next: done'"
+    );
+
+    let release_stdout = stdout(&["dockerfile", "render", "--variant", "release"]);
+    let out_release = stdout(&[
+        "dockerfile",
+        "render",
+        "--variant",
+        "release",
+        "--out",
+        dir.path().to_str().unwrap(),
+    ]);
+    let written_release = dir.path().join("Dockerfile.release");
+    assert!(
+        written_release.is_file(),
+        "expected <dir>/Dockerfile.release to be written"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&written_release).unwrap(),
+        release_stdout,
+        "written Dockerfile.release matches stdout render"
+    );
+    assert!(
+        out_release.lines().any(|l| l == "next: done"),
+        "stdout must contain 'next: done'"
+    );
+}
+
+#[test]
+fn dockerfile_render_out_file_writes_exact_bytes_and_terminal_marker() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let file_source = dir.path().join("custom.Dockerfile");
+    let source_stdout = stdout(&["dockerfile", "render", "--variant", "source"]);
+    let out_source = stdout(&[
+        "dockerfile",
+        "render",
+        "--variant",
+        "source",
+        "--out",
+        file_source.to_str().unwrap(),
+    ]);
+    assert!(
+        file_source.is_file(),
+        "expected custom.Dockerfile to be written"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file_source).unwrap(),
+        source_stdout,
+        "custom file bytes equal stdout render"
+    );
+    assert!(
+        out_source.lines().any(|l| l == "next: done"),
+        "stdout must contain 'next: done'"
+    );
+
+    let file_release = dir.path().join("custom_release.Dockerfile");
+    let release_stdout = stdout(&["dockerfile", "render", "--variant", "release"]);
+    let out_release = stdout(&[
+        "dockerfile",
+        "render",
+        "--variant",
+        "release",
+        "--out",
+        file_release.to_str().unwrap(),
+    ]);
+    assert!(
+        file_release.is_file(),
+        "expected custom_release.Dockerfile to be written"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file_release).unwrap(),
+        release_stdout,
+        "custom release file bytes equal stdout render"
+    );
+    assert!(
+        out_release.lines().any(|l| l == "next: done"),
+        "stdout must contain 'next: done'"
+    );
+}
+
+#[test]
+fn dockerfile_render_strips_source_ownership_markers() {
+    for variant in ["source", "release"] {
+        let rendered = stdout(&["dockerfile", "render", "--variant", variant]);
+        for line in rendered.lines() {
+            let trimmed = line.trim_start();
+            assert!(
+                !trimmed.starts_with("# SPEC-MANAGED:"),
+                "{variant} output must not contain '# SPEC-MANAGED:': {line}"
+            );
+            assert_ne!(
+                trimmed, "# CODEGEN-BEGIN",
+                "{variant} output must not contain '# CODEGEN-BEGIN': {line}"
+            );
+            assert_ne!(
+                trimmed, "# CODEGEN-END",
+                "{variant} output must not contain '# CODEGEN-END': {line}"
+            );
+            assert!(
+                !trimmed.contains("HANDWRITE-BEGIN") && !trimmed.contains("HANDWRITE-END"),
+                "{variant} output must not contain HANDWRITE markers: {line}"
+            );
+            assert!(
+                !trimmed.contains("GENERATED-BEGIN") && !trimmed.contains("GENERATED-END"),
+                "{variant} output must not contain GENERATED markers: {line}"
+            );
+        }
+    }
+}
 // HANDWRITE-END
