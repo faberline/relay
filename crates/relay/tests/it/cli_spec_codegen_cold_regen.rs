@@ -18,6 +18,28 @@ fn run_relay(args: &[&str]) -> std::process::Output {
         .expect("run relay binary")
 }
 
+fn openapi_path_to_ts_template(path: &str) -> String {
+    let mut out = String::new();
+    let mut chars = path.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '{' {
+            let mut name = String::new();
+            for c in chars.by_ref() {
+                if c == '}' {
+                    break;
+                }
+                name.push(c);
+            }
+            out.push_str("${data.path.");
+            out.push_str(&name);
+            out.push('}');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn collect_tree(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut files = BTreeMap::new();
     let mut dirs = vec![root.to_path_buf()];
@@ -168,8 +190,9 @@ fn spec_codegen_cold_regeneration_is_deterministic_and_scaffold_free() {
                 .map(|(_, b)| String::from_utf8_lossy(b))
                 .collect();
             for path in &openapi_paths {
+                let ts_template = openapi_path_to_ts_template(path);
                 assert!(
-                    ts_client_text.contains(path.as_str()),
+                    ts_client_text.contains(path.as_str()) || ts_client_text.contains(&ts_template),
                     "generated TypeScript client text missing operation path {path}"
                 );
             }
