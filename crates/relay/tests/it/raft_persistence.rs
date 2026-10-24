@@ -134,4 +134,243 @@ async fn acked_work_is_not_resurrected_by_cold_replay() {
     assert_eq!(lease.seq, 5);
     assert!(engine.lease("s", "w2", now).unwrap().is_none());
 }
+
+/// AC1 (multi-voter hard-state restart): prove that voters restarted from their
+/// own data dir keep committed state without double-apply and rejoin the group,
+/// keeping at most one leader per term and losing no committed publish across
+/// a restart of the leader and of a follower.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn restarted_voters_rejoin_with_hard_state_intact() {
+    let _guard = crate::cluster::CLUSTER_TEST_LOCK.lock().await;
+    let mut c = crate::cluster::Cluster::prepare(3).await;
+    c.start_all(1024);
+
+    // Step 1: elect a leader, publish 3 messages through it, wait until every
+    // node's applied_index() is 3.
+    let leader = c.wait_leader().await;
+    for i in 0..3 {
+        let msg = format!("m{i}");
+        let (_, out) = c
+            .raft(leader)
+            .publish(&crate::cluster::cmd(&msg))
+            .await
+            .unwrap();
+        assert!(
+            !out.expect("step 1: outcome").deduped,
+            "step 1: node {leader} publish {msg} not deduped"
+        );
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    loop {
+        let all_applied = c.live().all(|(_, n)| n.raft.applied_index() == 3);
+        if all_applied {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "step 1: node 0..3 did not reach applied_index 3 within deadline"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    for (id, n) in c.live() {
+        assert_eq!(
+            n.raft.applied_index(),
+            3,
+            "step 1: node {id} applied_index is 3"
+        );
+    }
+
+    // Step 2, follower restart: kill one follower and start_node it again from
+    // the same dir. Within a bounded deadline its applied_index() is back to 3,
+    // its engine log_len("s") is 3 (no double-apply), and a leader is still
+    // known on all three nodes.
+    let follower = c.live().map(|(i, _)| i).find(|i| *i != leader).unwrap();
+    c.kill(follower).await;
+    c.start_node(follower, 1024);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    loop {
+        let follower_applied = c.raft(follower).applied_index() == 3;
+        let follower_log = c.raft(follower).relay().log_len("s").unwrap() == 3;
+        let mut all_know_leader = true;
+        for (_, n) in c.live() {
+            if n.raft.leader().await.is_none() {
+                all_know_leader = false;
+                break;
+            }
+        }
+        if follower_applied && follower_log && all_know_leader {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "step 2: node {follower} restart did not converge within deadline"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        c.raft(follower).applied_index(),
+        3,
+        "step 2: node {follower} applied_index is 3"
+    );
+    assert_eq!(
+        c.raft(follower).relay().log_len("s").unwrap(),
+        3,
+        "step 2: node {follower} engine log_len is 3 (no double-apply)"
+    );
+    for (id, n) in c.live() {
+        assert!(
+            n.raft.leader().await.is_some(),
+            "step 2: node {id} knows a leader"
+        );
+    }
+
+    // Step 3, leader restart: kill the leader and start_node it again from the
+    // same dir (do not wait for another leader first). Within a bounded deadline
+    // the group has exactly one node for which is_leader() is true. Publish 1
+    // more message through a live node: it commits, and every node converges to
+    // applied_index() == 4 and log_len("s") == 4, with the same message ids on
+    // every node and no duplicate.
+    c.kill(leader).await;
+    c.start_node(leader, 1024);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    let step3_leader = loop {
+        let mut leaders = Vec::new();
+        for (id, n) in c.live() {
+            if n.raft.is_leader().await {
+                leaders.push(id);
+            }
+        }
+        if leaders.len() == 1 {
+            break leaders[0];
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "step 3: node {leader} restart did not reach exactly one leader within deadline"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    };
+    assert!(
+        c.raft(step3_leader).is_leader().await,
+        "step 3: node {step3_leader} is leader"
+    );
+
+    let (_, out) = c
+        .raft(step3_leader)
+        .publish(&crate::cluster::cmd("m3"))
+        .await
+        .unwrap();
+    assert!(
+        !out.expect("step 3: outcome").deduped,
+        "step 3: node {step3_leader} publish m3 not deduped"
+    );
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    loop {
+        let converged = c
+            .live()
+            .all(|(_, n)| n.raft.applied_index() == 4 && n.raft.relay().log_len("s").unwrap() == 4);
+        if converged {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "step 3: node 0..3 did not converge to applied_index 4 and log_len 4 within deadline"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let want_ids = vec![
+        "m0".to_string(),
+        "m1".to_string(),
+        "m2".to_string(),
+        "m3".to_string(),
+    ];
+    for (id, n) in c.live() {
+        assert_eq!(
+            n.raft.applied_index(),
+            4,
+            "step 3: node {id} applied_index is 4"
+        );
+        assert_eq!(
+            n.raft.relay().log_len("s").unwrap(),
+            4,
+            "step 3: node {id} log_len is 4"
+        );
+        assert_eq!(
+            c.message_ids(id),
+            want_ids,
+            "step 3: node {id} message ids match without duplicate"
+        );
+    }
+
+    // Step 4: restart all three nodes one after another, then wait_leader, and
+    // publish 1 more message: every node reaches applied_index() == 5 and
+    // log_len("s") == 5. An already published message_id published again is
+    // reported deduped or does not grow log_len.
+    for id in 0..3 {
+        c.kill(id).await;
+        c.start_node(id, 1024);
+    }
+    let step4_leader = c.wait_leader().await;
+
+    let (_, out) = c
+        .raft(step4_leader)
+        .publish(&crate::cluster::cmd("m4"))
+        .await
+        .unwrap();
+    assert!(
+        !out.expect("step 4: outcome").deduped,
+        "step 4: node {step4_leader} publish m4 not deduped"
+    );
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    loop {
+        let converged = c
+            .live()
+            .all(|(_, n)| n.raft.applied_index() == 5 && n.raft.relay().log_len("s").unwrap() == 5);
+        if converged {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "step 4: node 0..3 did not converge to applied_index 5 and log_len 5 within deadline"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    for (id, n) in c.live() {
+        assert_eq!(
+            n.raft.applied_index(),
+            5,
+            "step 4: node {id} applied_index is 5"
+        );
+        assert_eq!(
+            n.raft.relay().log_len("s").unwrap(),
+            5,
+            "step 4: node {id} log_len is 5"
+        );
+    }
+
+    let (_, dup_out) = c
+        .raft(step4_leader)
+        .publish(&crate::cluster::cmd("m0"))
+        .await
+        .unwrap();
+    let is_deduped = dup_out.as_ref().is_some_and(|o| o.deduped);
+    // Bounded check: log_len does not grow beyond 5 on any node
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    for (id, n) in c.live() {
+        assert!(
+            is_deduped || n.raft.relay().log_len("s").unwrap() == 5,
+            "step 4: node {id} duplicate publish reported deduped or log_len stayed 5"
+        );
+        assert_eq!(
+            n.raft.relay().log_len("s").unwrap(),
+            5,
+            "step 4: node {id} log_len did not grow on duplicate"
+        );
+    }
+
+    c.shutdown().await;
+}
 // HANDWRITE-END
