@@ -13,12 +13,31 @@
 #![cfg(feature = "operator")]
 
 use std::collections::HashMap;
+use std::process::Command;
 
 use relay::operator::render::render;
 use relay::operator::{crd_yaml, Relay, RelaySpec};
 use relay::tls::install_default_crypto_provider;
 use serde_json::Value;
 use service_k8s::{ClusterSpec, ManagedService, ReadyFacts};
+
+fn run(args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_relay"))
+        .args(args)
+        .output()
+        .expect("run relay binary")
+}
+
+fn stdout(args: &[&str]) -> String {
+    let out = run(args);
+    assert!(
+        out.status.success(),
+        "`relay {}` failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).expect("utf8 stdout")
+}
 
 fn spec(replicas: u32) -> RelaySpec {
     RelaySpec {
@@ -407,6 +426,155 @@ fn backup_cron_job_renders_only_when_policy_set() {
         backup_props["destination"]["type"], "string",
         "destination is a FLAT URI STRING (structural schemas cannot carry the \
          tagged-union BackupDestination)"
+    );
+}
+
+/// R2 / AC1..AC4 — Close capability claim: Kubernetes-Native Deployment /
+/// relayspec-crd-operator-instance-render (issue #34).
+///
+/// Proves the whole chain: the CR that `relay k8s instance render` prints
+/// is a valid `Relay` custom resource, and `relay::operator::render::render`
+/// turns it into the child objects (StatefulSet, ServiceAccount, Services, PDB).
+#[test]
+fn relayspec_crd_operator_instance_render() {
+    let profiles = [
+        ("dev", "default", 1, "1Gi"),
+        ("staging", "staging", 1, "20Gi"),
+        ("prod", "production", 3, "100Gi"),
+    ];
+
+    for (profile, expected_ns, expected_replicas, expected_storage) in profiles {
+        let yaml = stdout(&["k8s", "instance", "render", "--profile", profile]);
+        let mut cr: Relay = serde_yaml::from_str(&yaml)
+            .unwrap_or_else(|e| panic!("profile {profile} YAML does not parse into Relay: {e}"));
+
+        assert_eq!(
+            cr.metadata.namespace.as_deref(),
+            Some(expected_ns),
+            "profile {profile} CR metadata.namespace"
+        );
+        let cr_name = cr
+            .metadata
+            .name
+            .clone()
+            .unwrap_or_else(|| "relay".to_string());
+
+        let uid = format!("uid-{profile}-test");
+        cr.metadata.uid = Some(uid.clone());
+
+        let objs = render(&cr);
+        assert!(
+            !objs.is_empty(),
+            "profile {profile}: render produced no objects"
+        );
+
+        // Required child objects: StatefulSet, ServiceAccount, headless Service, client Service, PDB.
+        let sts = of_kind(&objs, "StatefulSet");
+        assert_eq!(
+            sts["spec"]["replicas"], expected_replicas,
+            "profile {profile} replicas"
+        );
+
+        let env = env_of(sts);
+        let get_env = |k: &str| env.iter().find(|(n, _)| *n == k).unwrap().1;
+        assert_eq!(
+            get_env("RELAY_DATA_DIR")["value"],
+            "/data",
+            "profile {profile} RELAY_DATA_DIR env"
+        );
+
+        assert_eq!(
+            sts["spec"]["volumeClaimTemplates"][0]["spec"]["resources"]["requests"]["storage"],
+            expected_storage,
+            "profile {profile} PVC storage"
+        );
+
+        let _sa = of_kind(&objs, "ServiceAccount");
+        let _headless = objs
+            .iter()
+            .find(|o| o["kind"] == "Service" && o["spec"]["clusterIP"] == "None")
+            .unwrap_or_else(|| panic!("profile {profile} missing headless Service"));
+        let _client = objs
+            .iter()
+            .find(|o| o["kind"] == "Service" && o["spec"]["type"] == "ClusterIP")
+            .unwrap_or_else(|| panic!("profile {profile} missing client Service"));
+        let _pdb = of_kind(&objs, "PodDisruptionBudget");
+
+        // Auth and Secret volume assertions:
+        if profile == "prod" {
+            assert_eq!(
+                get_env("RELAY_AUTH")["value"],
+                "required",
+                "prod profile requires RELAY_AUTH"
+            );
+            let vols = sts["spec"]["template"]["spec"]["volumes"]
+                .as_array()
+                .expect("volumes array");
+            let vol = vols
+                .iter()
+                .find(|v| v["name"] == "relay-token-registry")
+                .expect("prod profile missing token-registry volume");
+            assert_eq!(
+                vol["secret"]["secretName"], "relay-token-registry",
+                "token-registry secretName"
+            );
+        } else if profile == "dev" {
+            assert!(
+                !env.iter().any(|(k, _)| *k == "RELAY_AUTH"),
+                "dev profile must not render RELAY_AUTH"
+            );
+            if let Some(vols) = sts["spec"]["template"]["spec"]["volumes"].as_array() {
+                assert!(
+                    vols.iter().all(|v| v["name"] != "relay-token-registry"),
+                    "dev profile must not render token-registry volume"
+                );
+            }
+        }
+
+        // Owner reference & namespace on every rendered object.
+        for obj in &objs {
+            let kind = obj["kind"].as_str().unwrap_or("unknown");
+            assert_eq!(
+                obj["metadata"]["namespace"], expected_ns,
+                "profile {profile} object {kind} namespace mismatch"
+            );
+
+            let owner_refs = obj["metadata"]["ownerReferences"]
+                .as_array()
+                .unwrap_or_else(|| {
+                    panic!("profile {profile} object {kind} missing ownerReferences")
+                });
+            assert_eq!(
+                owner_refs.len(),
+                1,
+                "profile {profile} object {kind} expected exactly 1 owner reference"
+            );
+            assert_eq!(
+                owner_refs[0]["uid"], uid,
+                "profile {profile} object {kind} ownerRef uid mismatch"
+            );
+            assert_eq!(
+                owner_refs[0]["name"], cr_name,
+                "profile {profile} object {kind} ownerRef name mismatch"
+            );
+            assert_eq!(
+                owner_refs[0]["kind"], "Relay",
+                "profile {profile} object {kind} ownerRef kind mismatch"
+            );
+            assert_eq!(
+                owner_refs[0]["apiVersion"], "relay.dev/v1alpha1",
+                "profile {profile} object {kind} ownerRef apiVersion mismatch"
+            );
+        }
+    }
+
+    // The template profile is excluded on purpose, with a comment: its
+    // numeric fields are REPLACE_ME__* placeholders and must not parse.
+    let template_yaml = stdout(&["k8s", "instance", "render", "--profile", "template"]);
+    let template_res: Result<Relay, _> = serde_yaml::from_str(&template_yaml);
+    assert!(
+        template_res.is_err(),
+        "template profile carries placeholder values and must not parse into Relay"
     );
 }
 // HANDWRITE-END
