@@ -42,14 +42,22 @@ cleanup() {
   if [[ -n "${RELAY_SOAK_KEEP_LOGS_DIR:-}" ]]; then
     mkdir -p "$RELAY_SOAK_KEEP_LOGS_DIR"
     if [[ -n "$AUTOSTART_DIR" && -f "$AUTOSTART_DIR/relay.log" ]]; then
-      cp "$AUTOSTART_DIR/relay.log" "$RELAY_SOAK_KEEP_LOGS_DIR/" 2>/dev/null || true
+      cp "$AUTOSTART_DIR/relay.log" "$RELAY_SOAK_KEEP_LOGS_DIR/"
     fi
     if [[ -n "$SOAK_TMP_DIR" && -f "$SOAK_TMP_DIR/latency-a.seconds" ]]; then
-      cp "$SOAK_TMP_DIR/latency-a.seconds" "$RELAY_SOAK_KEEP_LOGS_DIR/" 2>/dev/null || true
+      cp "$SOAK_TMP_DIR/latency-a.seconds" "$RELAY_SOAK_KEEP_LOGS_DIR/"
     fi
     if [[ -n "$SOAK_TMP_DIR" && -f "$SOAK_TMP_DIR/latency-b.seconds" ]]; then
-      cp "$SOAK_TMP_DIR/latency-b.seconds" "$RELAY_SOAK_KEEP_LOGS_DIR/" 2>/dev/null || true
+      cp "$SOAK_TMP_DIR/latency-b.seconds" "$RELAY_SOAK_KEEP_LOGS_DIR/"
     fi
+  fi
+  if [[ -n "${RELAY_SOAK_CLEANUP_RECEIPT:-}" ]]; then
+    mkdir -p "$(dirname "$RELAY_SOAK_CLEANUP_RECEIPT")"
+    cat <<EOF >"$RELAY_SOAK_CLEANUP_RECEIPT"
+soak_autostart_pid=${AUTOSTART_PID}
+soak_autostart_dir=${AUTOSTART_DIR}
+soak_tmp_dir=${SOAK_TMP_DIR}
+EOF
   fi
   if [[ -n "$AUTOSTART_PID" ]] && kill -0 "$AUTOSTART_PID" 2>/dev/null; then
     kill "$AUTOSTART_PID" 2>/dev/null || true
