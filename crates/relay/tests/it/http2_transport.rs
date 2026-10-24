@@ -375,6 +375,8 @@ async fn graceful_drain_readiness_keeps_serving_until_shutdown() {
         send_ok.is_ok(),
         "graceful drain readiness: sending shutdown on oneshot must succeed"
     );
+    drop(h2);
+    drop(client);
 
     let serve_completion = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
     assert!(
