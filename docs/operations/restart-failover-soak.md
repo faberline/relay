@@ -1,63 +1,74 @@
 # Restart, Failover, and Live Soak Verification Evidence
 
-This document records the reproducible gate and evidence result for the "restart, failover, and live soak" verification axis under parent epic `faberline/axiom#2320`.
+This document records the committed gate definition, wrapper implementation, and cloud qualification evidence for the "restart, failover, and live soak" verification axis under parent epic `faberline/axiom#2320`.
 
 ## Metadata
 
-- **Commit**: `11a238db1723ee850e078885effe9926cbece888` (origin/main)
-- **Branch**: `issue/48`
-- **Environment**: Cloud CI (`x86_64-unknown-linux-gnu`, GitHub Actions runner) / macOS development environment
+- **Base Commit**: `11a238db1723ee850e078885effe9926cbece888` (origin/main)
+- **Candidate Branch**: `issue/48`
+- **Associated PR**: [#103](https://github.com/faberline/relay/pull/103)
+- **Environment**: Cloud CI (`x86_64-unknown-linux-gnu`, GitHub Actions runner `ubuntu-latest`)
 - **Capability Axis**: `cross-service-delivery-verification` / `relay-restart-failover-live-soak-verification`
-- **Terminal Result**: `passed`
+- **Terminal Qualification**: `PENDING` (awaiting candidate head CI execution and uploaded evidence receipt verification)
 
-## Verification Command
+## Verification Command and Gate Structure
 
-The reproducible local gate is executed via the wrapper:
+The reproducible integration gate is wrapped in [scripts/verify-restart-failover-soak.sh](../../scripts/verify-restart-failover-soak.sh). It executes in cloud CI on an ordinary unprivileged GitHub Actions runner:
 
-```bash
-bash scripts/verify-restart-failover-soak.sh
-```
+1. **Step 1 (Module Integration)**:
+   ```bash
+   cargo test --locked -p relay --test it -- durable:: raft_cluster:: raft_persistence:: backup::
+   ```
+2. **Step 2 (Non-Ignored Bounded Soak Harness)**:
+   ```bash
+   cargo test --locked -p relay --test it -- --ignored stability_relay_competitor_performance_bounded_soak::relay_competitor_performance_bounded_soak
+   ```
 
-Which executes and validates the following sequence:
+The wrapper asserts non-zero executed test counts for both steps, validates that every required module reports passing tests, verifies that `scripts/soak.sh` completes with 0 errors and non-zero operations within pinned resource ceilings, and writes raw logs and a structured JSON receipt (`target/restart-failover-soak-evidence/receipt.json`) before temporary directory cleanup.
 
-```bash
-cargo test --locked -p relay --test it durable:: raft_cluster:: raft_persistence:: backup::
-cargo test --locked -p relay --test it -- --ignored stability_relay_competitor_performance_bounded_soak::
-```
+## Test Inventory and Execution Provenance
 
-## Test Execution Summary
+### Inventory of Compiled Test Targets (16 Tests in `crates/relay/tests/it`)
 
-| Test Module / Harness | Tests Passed | Tests Failed | Status |
-|-----------------------|--------------|--------------|--------|
-| `durable::` | 6 | 0 | `passed` |
-| `raft_cluster::` | 3 | 0 | `passed` |
-| `raft_persistence::` | 2 | 0 | `passed` |
-| `backup::` | 4 | 0 | `passed` |
-| `stability_relay_competitor_performance_bounded_soak::` | 1 | 0 | `passed` |
-| **Total** | **16** | **0** | **`passed`** |
+- `durable::` (6 tests compiled/listed)
+- `raft_cluster::` (3 tests compiled/listed)
+- `raft_persistence::` (2 tests compiled/listed)
+- `backup::` (4 tests compiled/listed)
+- `stability_relay_competitor_performance_bounded_soak::` (1 test compiled/listed, marked `#[ignore]`)
 
-Zero tests failed across all modules. Each module reported at least one passing test, satisfying the fail-closed non-zero test requirement.
+### Verified Cloud CI Execution Status (Previous Head `0600047a56013c96f35a73ca2bda9e122b393114`)
 
-## Soak Workload and Resource Metrics
+From verified cloud CI run [`40129533332`](https://github.com/faberline/relay/actions/runs/40129533332) (job `120978083500`):
 
-The bounded soak harness (`scripts/soak.sh`) executes a fixed-keyspace publish, lease, heartbeat, inspect, and latency workload across two steady 30-second observation windows (total duration: 60s) with pinned growth ceilings:
+| Test Module / Case | Compiled Target Present | Cloud CI Status (Run 40129533332) |
+|--------------------|-------------------------|-----------------------------------|
+| `durable::` (6 cases) | Yes | **15 Passed** across standard modules |
+| `raft_cluster::` (3 cases) | Yes | **Passed** |
+| `raft_persistence::` (2 cases) | Yes | **Passed** |
+| `backup::` (4 cases) | Yes | **Passed** |
+| `stability_relay_competitor_performance_bounded_soak::relay_competitor_performance_bounded_soak` | Yes | **`ignored`** (NOT QUALIFIED in run 40129533332) |
 
-| Metric | Window A | Window B | Measured Growth / Drift | Ceiling / Threshold | Result |
-|--------|----------|----------|-------------------------|---------------------|--------|
-| **RSS** | ~12,400 KB | ~12,650 KB | +2.0% | <= 10% (`RELAY_SOAK_RSS_GROWTH_PCT`) | PASS |
-| **File Descriptors (FD)** | 14 | 14 | 0 | <= 8 (`RELAY_SOAK_FD_GROWTH`) | PASS |
-| **Threads / Tasks** | 6 | 6 | 0 | <= 4 (`RELAY_SOAK_TASK_GROWTH`) | PASS |
-| **p99 Latency** | 12 ms | 13 ms | +8.3% | <= 250 ms (`RELAY_SOAK_P99_MS`), <= 100% growth | PASS |
-| **Workload Errors** | 0 | 0 | 0 errors | 0 errors allowed | PASS |
+Because the bounded soak test was marked `#[ignore]` in ordinary workspace runs and `verify-restart-failover-soak.sh` was not previously invoked in CI, the soak harness was not executed in run `40129533332`.
 
-Both observation windows exhibited bounded stability without runaway memory growth, file descriptor leakage, or latency plateaus.
+### Bounded Soak Two-Window Resource Metrics
 
-## Architecture and Related Work References
+The soak workload assertions enforce the following frozen thresholds:
+- **Duration**: 60 seconds (two steady 30-second observation windows: `Window A` and `Window B`)
+- **RSS Growth Ceiling**: <= 10% (`RELAY_SOAK_RSS_GROWTH_PCT`)
+- **File Descriptor Growth Ceiling**: <= 8 (`RELAY_SOAK_FD_GROWTH`)
+- **Thread/Task Growth Ceiling**: <= 4 (`RELAY_SOAK_TASK_GROWTH`)
+- **p99 Latency Ceiling**: <= 250 ms (`RELAY_SOAK_P99_MS`), <= 100% growth (`RELAY_SOAK_P99_GROWTH_PCT`)
+- **Errors Allowed**: 0
+
+**Candidate Head Measurement Receipt**: `UNKNOWN / NOT_RUN`
+No receipt artifact existed on run `40129533332`. Measured values (operations, RSS drift, FD change, task growth, and p99 latency) will be populated directly from the verified cloud CI artifact receipt (`receipt.json`) generated by `verify-restart-failover-soak.sh` upon completion of the candidate head run.
+
+## Related Ownership and Capability References
 
 - **Cluster-Side Failover Owner**:
   - Rust test suite: [`crates/relay/tests/it/e2e/raft_failover.rs`](../../crates/relay/tests/it/e2e/raft_failover.rs)
-  - Cloud CI workflow: [`.github/workflows/gke-test.yml`](../../.github/workflows/gke-test.yml)
-  - The live multi-voter GKE failover window is managed and executed in cloud GKE CI, not locally.
+  - Cloud GKE workflow: [`.github/workflows/gke-test.yml`](../../.github/workflows/gke-test.yml)
+  - Status: `PENDING` (The live multi-voter GKE failover window is managed and executed in cloud GKE CI, not on GitHub runner or locally).
 
 - **Related Capability and Contract Claims**:
   - Issue [#18](https://github.com/faberline/relay/issues/18) (`raft-hard-state-restart-safety` / multi-voter restart recovery in `raft_persistence.rs`)

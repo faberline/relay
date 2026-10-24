@@ -53,3 +53,19 @@ jobs:
           uv run --python 3.13 --no-project scripts/release/verify-release-contract.py --app relay
           uv run --python 3.13 --no-project scripts/release/verify-release-contract.py --self-test
           uv run --python 3.13 --no-project scripts/release/make-gke-release-receipt.py --self-test
+      - name: Verify restart, failover, and soak wrapper self-test
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/verify-restart-failover-soak.sh --self-test
+      - name: Verify restart, failover, and live soak gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/verify-restart-failover-soak.sh target/restart-failover-soak-evidence
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: restart-failover-soak-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/restart-failover-soak-evidence/
+          if-no-files-found: warn

@@ -39,6 +39,18 @@ require() {
 cleanup() {
   local ec=$?
   trap - EXIT INT TERM
+  if [[ -n "${RELAY_SOAK_KEEP_LOGS_DIR:-}" ]]; then
+    mkdir -p "$RELAY_SOAK_KEEP_LOGS_DIR"
+    if [[ -n "$AUTOSTART_DIR" && -f "$AUTOSTART_DIR/relay.log" ]]; then
+      cp "$AUTOSTART_DIR/relay.log" "$RELAY_SOAK_KEEP_LOGS_DIR/" 2>/dev/null || true
+    fi
+    if [[ -n "$SOAK_TMP_DIR" && -f "$SOAK_TMP_DIR/latency-a.seconds" ]]; then
+      cp "$SOAK_TMP_DIR/latency-a.seconds" "$RELAY_SOAK_KEEP_LOGS_DIR/" 2>/dev/null || true
+    fi
+    if [[ -n "$SOAK_TMP_DIR" && -f "$SOAK_TMP_DIR/latency-b.seconds" ]]; then
+      cp "$SOAK_TMP_DIR/latency-b.seconds" "$RELAY_SOAK_KEEP_LOGS_DIR/" 2>/dev/null || true
+    fi
+  fi
   if [[ -n "$AUTOSTART_PID" ]] && kill -0 "$AUTOSTART_PID" 2>/dev/null; then
     kill "$AUTOSTART_PID" 2>/dev/null || true
     wait "$AUTOSTART_PID" 2>/dev/null || true
@@ -187,6 +199,24 @@ echo "   steady_drift: ${GROWTH_PCT}% (window A -> window B)"
 echo "   fd_window:    ${FD_A} -> ${FD_B}"
 echo "   tasks_window: ${TASK_A} -> ${TASK_B}"
 echo "   p99_window:   ${P99_A}ms -> ${P99_B}ms"
+
+if [[ -n "${RELAY_SOAK_REPORT_FILE:-}" ]]; then
+  mkdir -p "$(dirname "$RELAY_SOAK_REPORT_FILE")"
+  cat <<EOF >"$RELAY_SOAK_REPORT_FILE"
+duration_secs=$((2 * HALF))
+total_ops=${TOTAL_OPS}
+errors=${ERR_COUNT}
+rss_window_a_kb=${RSS_A}
+rss_window_b_kb=${RSS_B}
+steady_drift_pct=${GROWTH_PCT}
+fd_window_a=${FD_A}
+fd_window_b=${FD_B}
+tasks_window_a=${TASK_A}
+tasks_window_b=${TASK_B}
+p99_window_a_ms=${P99_A}
+p99_window_b_ms=${P99_B}
+EOF
+fi
 
 (( ERR_COUNT == 0 )) || { echo "!! Relay soak errors observed" >&2; exit 1; }
 (( GROWTH_PCT <= RSS_GROWTH_PCT )) || {
