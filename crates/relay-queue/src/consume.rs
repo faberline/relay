@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use axum::body::{Body, BodyDataStream, Bytes};
 use axum::extract::{Extension, Path, State};
@@ -152,6 +153,64 @@ pub async fn consume(
         .into_response()
 }
 
+/// Outcome of a lease attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LeaseOutcome<T> {
+    Leased(T),
+    Empty,
+    Failed,
+}
+
+/// Classify the result of a lease call into three outcomes:
+/// got a lease, queue empty, or lease failed (#59).
+pub(crate) fn classify_lease_result<T, E>(res: Result<Option<T>, E>) -> LeaseOutcome<T> {
+    match res {
+        Ok(Some(lease)) => LeaseOutcome::Leased(lease),
+        Ok(None) => LeaseOutcome::Empty,
+        Err(_) => LeaseOutcome::Failed,
+    }
+}
+
+pub(crate) const MIN_LEASE_BACKOFF: Duration = Duration::from_millis(50);
+pub(crate) const MAX_LEASE_BACKOFF: Duration = Duration::from_millis(1000);
+
+/// Bounded exponential backoff schedule for retrying failed leases (#59).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LeaseBackoff {
+    current: Duration,
+    min: Duration,
+    max: Duration,
+}
+
+impl Default for LeaseBackoff {
+    fn default() -> Self {
+        Self::new(MIN_LEASE_BACKOFF, MAX_LEASE_BACKOFF)
+    }
+}
+
+impl LeaseBackoff {
+    pub(crate) fn new(min: Duration, max: Duration) -> Self {
+        Self {
+            current: min,
+            min,
+            max,
+        }
+    }
+
+    /// Advance to the next backoff step (doubling, capped at max).
+    /// Returns the backoff duration for this step.
+    pub(crate) fn next_backoff(&mut self) -> Duration {
+        let dur = self.current;
+        self.current = (self.current.saturating_mul(2)).min(self.max);
+        dur
+    }
+
+    /// Reset backoff after a successful lease or when queue is empty.
+    pub(crate) fn reset(&mut self) {
+        self.current = self.min;
+    }
+}
+
 /// Drive one consume session (post-Subscribe): keep ≤ prefetch entries in
 /// flight (lease + push), freeing a credit per Ack/Nack; wake on publish.
 async fn drive(
@@ -171,20 +230,26 @@ async fn drive(
     // watch channel tracks the latest revision, so a wake signaled between our
     // drain and the `.changed()` await is not lost.
     let mut wake = relay.subscribe_wake(&subject);
+    let mut backoff = LeaseBackoff::default();
     loop {
+        let mut retry_delay = None;
         while inflight < prefetch {
-            let lease = match &raft {
-                Some(raft) => raft
-                    .lease(subject.clone(), consumer_id.clone(), Utc::now())
-                    .await
-                    .ok()
-                    .flatten(),
-                None => relay
+            let outcome = match &raft {
+                Some(raft) => classify_lease_result(
+                    raft.lease(subject.clone(), consumer_id.clone(), Utc::now())
+                        .await,
+                ),
+                None => match relay
                     .lease(&subject, &consumer_id, Utc::now())
-                    .unwrap_or(None),
+                    .unwrap_or(None)
+                {
+                    Some(l) => LeaseOutcome::Leased(l),
+                    None => LeaseOutcome::Empty,
+                },
             };
-            match lease {
-                Some(l) => {
+            match outcome {
+                LeaseOutcome::Leased(l) => {
+                    backoff.reset();
                     let (message_id, payload) = relay
                         .entry(&l.subject, l.shard, l.seq)
                         .ok()
@@ -203,7 +268,21 @@ async fn drive(
                     epochs.insert(l.lease_id, l.epoch);
                     inflight += 1;
                 }
-                None => break, // queue empty
+                LeaseOutcome::Empty => {
+                    backoff.reset();
+                    break; // queue empty: wake-only behavior (no idle polling)
+                }
+                LeaseOutcome::Failed => {
+                    let delay = backoff.next_backoff();
+                    tracing::warn!(
+                        subject = %subject,
+                        consumer_id = %consumer_id,
+                        retry_after_ms = delay.as_millis(),
+                        "raft lease failed; retrying after backoff"
+                    );
+                    retry_delay = Some(delay);
+                    break;
+                }
             }
         }
         tokio::select! {
@@ -236,6 +315,14 @@ async fn drive(
             // A publish/release on this subject (or a reconciler reclaim) woke us;
             // loop back and lease whatever is now ready.
             _ = wake.changed() => {}
+            // On lease failure: wake after bounded backoff to retry instead of stalling (#59).
+            _ = async {
+                if let Some(dur) = retry_delay {
+                    tokio::time::sleep(dur).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {}
         }
     }
 }
@@ -271,5 +358,36 @@ mod tests {
             payload: serde_json::json!({"k": 1}),
         };
         assert!(encode_frame(&e).len() > 4);
+    }
+
+    #[test]
+    fn classify_lease_result_outcomes() {
+        assert_eq!(
+            classify_lease_result::<&str, &str>(Ok(Some("lease-1"))),
+            LeaseOutcome::Leased("lease-1")
+        );
+        assert_eq!(
+            classify_lease_result::<&str, &str>(Ok(None)),
+            LeaseOutcome::Empty
+        );
+        assert_eq!(
+            classify_lease_result::<&str, &str>(Err("raft proposal timeout")),
+            LeaseOutcome::Failed
+        );
+    }
+
+    #[tokio::test]
+    async fn lease_backoff_schedule_capped_and_reset() {
+        let mut backoff = LeaseBackoff::default();
+        assert_eq!(backoff.next_backoff(), Duration::from_millis(50));
+        assert_eq!(backoff.next_backoff(), Duration::from_millis(100));
+        assert_eq!(backoff.next_backoff(), Duration::from_millis(200));
+        assert_eq!(backoff.next_backoff(), Duration::from_millis(400));
+        assert_eq!(backoff.next_backoff(), Duration::from_millis(800));
+        assert_eq!(backoff.next_backoff(), Duration::from_millis(1000));
+        assert_eq!(backoff.next_backoff(), Duration::from_millis(1000));
+
+        backoff.reset();
+        assert_eq!(backoff.next_backoff(), Duration::from_millis(50));
     }
 }
