@@ -62,4 +62,72 @@ fn offline_spec_and_three_client_languages_share_one_contract() {
         assert!(String::from_utf8_lossy(&generated.stdout).contains("next: done"));
     }
 }
+
+/// shared upgrade issue surface (WI #5 / claim shared-upgrade-issue-surface):
+/// `relay upgrade` and `relay issue` expose the shared cli-std surface offline.
+#[test]
+fn shared_upgrade_issue_surface() {
+    let issue_help = relay(&["issue", "--help"]);
+    assert!(issue_help.status.success());
+    let stdout = String::from_utf8(issue_help.stdout).unwrap();
+    for sub in ["search", "view", "create", "comment"] {
+        assert!(stdout.contains(sub), "missing {sub} in relay issue --help");
+    }
+
+    let upgrade_help = relay(&["upgrade", "--help"]);
+    assert!(upgrade_help.status.success());
+    let stdout = String::from_utf8(upgrade_help.stdout).unwrap();
+    for flag in ["--check", "--version", "--force", "--yes"] {
+        assert!(
+            stdout.contains(flag),
+            "missing {flag} in relay upgrade --help"
+        );
+    }
+
+    let create_dry = relay(&[
+        "issue",
+        "create",
+        "--dry-run",
+        "--title",
+        "t",
+        "it",
+        "broke",
+    ]);
+    assert!(create_dry.status.success());
+    let stdout = String::from_utf8(create_dry.stdout).unwrap();
+    assert!(
+        stdout.contains("t"),
+        "create dry-run output must contain title 't'"
+    );
+    assert!(
+        stdout.contains("app:relay"),
+        "create dry-run output must contain 'app:relay'"
+    );
+
+    let comment_dry = relay(&["issue", "comment", "123", "--dry-run", "still", "broken"]);
+    assert!(comment_dry.status.success());
+    let stdout = String::from_utf8(comment_dry.stdout).unwrap();
+    assert!(
+        stdout.contains("#123"),
+        "comment dry-run output must contain '#123'"
+    );
+    assert!(
+        stdout.contains("still broken"),
+        "comment dry-run output must contain 'still broken'"
+    );
+
+    for args in [
+        &["issue", "view"][..],
+        &["issue", "view", "abc"][..],
+        &["issue", "search", "--state", "bogus"][..],
+        &["issue", "comment", "0", "--dry-run"][..],
+    ] {
+        let out = relay(args);
+        assert!(
+            !out.status.success(),
+            "expected non-zero exit for `relay {}`, got success",
+            args.join(" ")
+        );
+    }
+}
 // HANDWRITE-END
