@@ -8,6 +8,7 @@ How to run, configure, and test relay.
 | [ha.md](../ha.md) | Auto-mode raft HA, snapshots and the applied floor, the operator CR, backup and restore, and peer TLS. |
 | [worker-protocol.md](../worker-protocol.md) | The HTTP/2 + OpenAPI contract that workers in any language use. |
 | [perf-gate.md](../perf-gate.md) | The competitor perf gate and how to run it. |
+| [restart-failover-soak.md](restart-failover-soak.md) | The restart, failover, and soak verification axis gate and evidence record. |
 
 ## Tests
 
