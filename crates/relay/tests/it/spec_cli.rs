@@ -6,6 +6,7 @@
 //! through the shared `openapi-codegen`, and the `llm` operations topic
 //! names the backup / peer-TLS / spec surfaces. No server, no network.
 
+use std::collections::BTreeSet;
 use std::process::Command;
 
 fn run(args: &[&str]) -> std::process::Output {
@@ -24,6 +25,21 @@ fn stdout(args: &[&str]) -> String {
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8(out.stdout).expect("utf8 stdout")
+}
+
+pub(crate) fn relay_spec_doc() -> serde_json::Value {
+    let raw = stdout(&["spec"]);
+    serde_json::from_str(&raw).expect("`relay spec` emits JSON")
+}
+
+pub(crate) fn relay_spec_paths() -> BTreeSet<String> {
+    let doc = relay_spec_doc();
+    doc["paths"]
+        .as_object()
+        .expect("paths object in `relay spec` JSON")
+        .keys()
+        .cloned()
+        .collect()
 }
 
 /// R1 / AC1: `relay spec` emits parseable OpenAPI in every format — the
@@ -80,6 +96,81 @@ fn spec_prints_parseable_openapi_in_every_format() {
         !run(&["spec", "--fields"]).status.success(),
         "--fields is keep-only and must not parse on relay"
     );
+}
+
+/// #24: `relay spec` lists the complete public API (all 10 endpoints),
+/// matching YAML output and handler method declarations.
+#[test]
+fn spec_lists_all_ten_public_endpoints_with_accurate_methods() {
+    let expected_paths = BTreeSet::from([
+        "/admin/backup".to_string(),
+        "/v1/{subject}/ack".to_string(),
+        "/v1/{subject}/ack-batch".to_string(),
+        "/v1/{subject}/consume".to_string(),
+        "/v1/{subject}/heartbeat".to_string(),
+        "/v1/{subject}/lease".to_string(),
+        "/v1/{subject}/lease-batch".to_string(),
+        "/v1/{subject}/len".to_string(),
+        "/v1/{subject}/publish".to_string(),
+        "/v1/{subject}/publish-batch".to_string(),
+    ]);
+
+    let doc = relay_spec_doc();
+    let paths_obj = doc["paths"]
+        .as_object()
+        .expect("`relay spec` JSON must contain paths object");
+    let actual_paths: BTreeSet<String> = paths_obj.keys().cloned().collect();
+
+    let missing: Vec<_> = expected_paths.difference(&actual_paths).cloned().collect();
+    let extra: Vec<_> = actual_paths.difference(&expected_paths).cloned().collect();
+    assert!(
+        actual_paths == expected_paths,
+        "`relay spec` paths do not match expected 10 paths. Missing: {missing:?}, Extra: {extra:?}"
+    );
+
+    // The same test parses `relay spec --format openapi-yaml` and asserts its `paths` key set equals the JSON key set.
+    let yaml_out = stdout(&["spec", "--format", "openapi-yaml"]);
+    let yaml: serde_yaml::Value =
+        serde_yaml::from_str(&yaml_out).expect("`relay spec --format openapi-yaml` emits YAML");
+    let yaml_paths_obj = yaml
+        .get("paths")
+        .and_then(|v| v.as_mapping())
+        .expect("`relay spec --format openapi-yaml` must contain paths mapping");
+    let yaml_paths: BTreeSet<String> = yaml_paths_obj
+        .keys()
+        .filter_map(|k| k.as_str().map(|s| s.to_string()))
+        .collect();
+    assert_eq!(
+        yaml_paths, actual_paths,
+        "YAML paths key set must equal JSON paths key set"
+    );
+
+    // The test asserts each path lists the HTTP method its handler declares.
+    // Methods declared via #[utoipa::path(...)]:
+    // - publish, publish-batch, consume, lease, lease-batch, ack, ack-batch, heartbeat: post
+    // - len, /admin/backup: get
+    let expected_methods = [
+        ("/v1/{subject}/publish", "post"),
+        ("/v1/{subject}/publish-batch", "post"),
+        ("/v1/{subject}/consume", "post"),
+        ("/v1/{subject}/lease", "post"),
+        ("/v1/{subject}/lease-batch", "post"),
+        ("/v1/{subject}/ack", "post"),
+        ("/v1/{subject}/ack-batch", "post"),
+        ("/v1/{subject}/heartbeat", "post"),
+        ("/v1/{subject}/len", "get"),
+        ("/admin/backup", "get"),
+    ];
+
+    for (path, method) in expected_methods {
+        let path_val = paths_obj
+            .get(path)
+            .unwrap_or_else(|| panic!("missing expected path {path} in JSON paths"));
+        assert!(
+            path_val.get(method).is_some(),
+            "path {path} must declare HTTP method {method}"
+        );
+    }
 }
 
 /// R1 / AC1: `relay spec gen --lang <l> --out <dir>` writes a non-empty
