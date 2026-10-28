@@ -182,4 +182,96 @@ fn llm_operations_topic_documents_the_new_surfaces() {
         );
     }
 }
+
+/// R1 / AC3: shared llm topic surface conformance (claim `shared-llm-topic-surface`, WI #4).
+/// Drives the compiled relay binary offline to verify:
+/// - `relay llm --topic operations` prints the same output as `relay llm operations`.
+/// - `relay llm` and `relay llm outline` still print the outline.
+/// - The markdown outline lists `http-api` and `operations`.
+/// - `relay llm --format json` parses as JSON with `project == "relay"`, a non-empty `version`,
+///   and topic ids `["http-api", "operations"]`.
+/// - `relay llm --topic http-api --format json` parses with `topic == "http-api"` and a non-empty `body`.
+/// - Giving both a positional topic and `--topic` is a clap usage error (nonzero exit), not a silent pick.
+/// - `relay llm nope` exits nonzero and stderr contains `unknown llm topic` and `outline, http-api, operations`.
+#[test]
+fn shared_llm_topic_surface_conformance() {
+    // 1. relay llm and relay llm outline both print the outline, listing http-api and operations.
+    let bare = stdout(&["llm"]);
+    let outline = stdout(&["llm", "outline"]);
+    assert_eq!(bare, outline, "relay llm and relay llm outline must match");
+    assert!(
+        bare.contains("http-api"),
+        "outline must list http-api topic"
+    );
+    assert!(
+        bare.contains("operations"),
+        "outline must list operations topic"
+    );
+
+    // 2. relay llm --topic operations prints the same output as relay llm operations.
+    let ops_flag = stdout(&["llm", "--topic", "operations"]);
+    let ops_pos = stdout(&["llm", "operations"]);
+    assert_eq!(
+        ops_flag, ops_pos,
+        "relay llm --topic operations must match relay llm operations"
+    );
+
+    // 3. relay llm --format json parses as JSON with project == "relay", non-empty version,
+    // and topic ids ["http-api", "operations"].
+    let json_outline_str = stdout(&["llm", "--format", "json"]);
+    let json_outline: serde_json::Value =
+        serde_json::from_str(&json_outline_str).expect("relay llm --format json emits JSON");
+    assert_eq!(json_outline["project"], "relay");
+    assert!(
+        json_outline["version"]
+            .as_str()
+            .is_some_and(|v| !v.is_empty()),
+        "version must be non-empty"
+    );
+    let topics_arr = json_outline["topics"]
+        .as_array()
+        .expect("topics must be array");
+    let topic_ids: Vec<&str> = topics_arr.iter().filter_map(|t| t["id"].as_str()).collect();
+    assert_eq!(
+        topic_ids,
+        vec!["http-api", "operations"],
+        "JSON outline topic ids must be [\"http-api\", \"operations\"]"
+    );
+
+    // 4. relay llm --topic http-api --format json parses with topic == "http-api" and a non-empty body.
+    let json_topic_str = stdout(&["llm", "--topic", "http-api", "--format", "json"]);
+    let json_topic: serde_json::Value = serde_json::from_str(&json_topic_str)
+        .expect("relay llm --topic http-api --format json emits JSON");
+    assert_eq!(json_topic["topic"], "http-api");
+    assert!(
+        json_topic["body"].as_str().is_some_and(|b| !b.is_empty()),
+        "body must be non-empty"
+    );
+
+    // 5. Giving both a positional topic and --topic is a clap usage error (nonzero exit).
+    let both = run(&["llm", "--topic", "operations", "operations"]);
+    assert!(
+        !both.status.success(),
+        "giving both positional topic and --topic must fail"
+    );
+
+    let both2 = run(&["llm", "operations", "--topic", "operations"]);
+    assert!(
+        !both2.status.success(),
+        "giving both positional topic and --topic must fail"
+    );
+
+    // 6. relay llm nope exits nonzero and stderr contains unknown llm topic and outline, http-api, operations.
+    let nope = run(&["llm", "nope"]);
+    assert!(!nope.status.success(), "relay llm nope must exit nonzero");
+    let nope_err = String::from_utf8_lossy(&nope.stderr);
+    assert!(
+        nope_err.contains("unknown llm topic"),
+        "stderr must contain 'unknown llm topic': {nope_err}"
+    );
+    assert!(
+        nope_err.contains("outline, http-api, operations"),
+        "stderr must contain 'outline, http-api, operations': {nope_err}"
+    );
+}
 // HANDWRITE-END
