@@ -92,6 +92,13 @@ Replica mode loads peer mTLS material via `peer-tls`:
 `RELAY_PEER_TLS_CERT` / `RELAY_PEER_TLS_KEY` / `RELAY_PEER_TLS_CA`
 (+ `RELAY_PEER_MTLS=on` to require client certs). Serve validates the material
 fail-fast at startup — partial config or a mis-pointed path exits nonzero.
+Tested fail-fast validation cases:
+- Missing cert, key, or CA path
+- Partial TLS path configuration
+- Non-PEM certificate, private key, or CA file
+- Mismatched private key and certificate pair
+- Empty CA file
+
 `raft-runtime::PeerTransport` serves `/raft/*` on the dedicated listener with
 mutual identity validation and dials every peer over the same reloadable
 certificate snapshot. Unknown CAs, wrong server identities, expired chains,
