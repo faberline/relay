@@ -62,4 +62,75 @@ fn offline_spec_and_three_client_languages_share_one_contract() {
         assert!(String::from_utf8_lossy(&generated.stdout).contains("next: done"));
     }
 }
+
+/// shared issue upgrade terminal markers (claim shared-issue-upgrade-terminal-markers):
+/// prove that `relay issue` and `relay upgrade` verbs end stdout with chainable markers.
+#[test]
+fn shared_issue_upgrade_terminal_markers_issue_create() {
+    let output = relay(&["issue", "create", "--dry-run", "test marker issue"]);
+    assert!(
+        output.status.success(),
+        "relay issue create --dry-run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("valid utf8 stdout");
+    assert!(
+        stdout.contains("app:relay"),
+        "expected 'app:relay' label in issue preview: {stdout}"
+    );
+    let last_non_empty = stdout
+        .lines()
+        .rfind(|line| !line.trim().is_empty())
+        .expect("non-empty stdout");
+    assert_eq!(last_non_empty, "next: done");
+    assert!(
+        cli_std::chainable::assert_chainable(stdout).is_ok(),
+        "cli_std::chainable::assert_chainable failed for issue create"
+    );
+}
+
+#[test]
+#[cfg(not(feature = "self-update"))]
+fn shared_issue_upgrade_terminal_markers_upgrade_check() {
+    let output = relay(&["upgrade", "--check"]);
+    assert!(
+        output.status.success(),
+        "relay upgrade --check failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("valid utf8 stdout");
+    assert!(
+        stdout.contains("latest:  unavailable"),
+        "expected 'latest:  unavailable' in upgrade check stdout: {stdout}"
+    );
+    let last_non_empty = stdout
+        .lines()
+        .rfind(|line| !line.trim().is_empty())
+        .expect("non-empty stdout");
+    assert_eq!(last_non_empty, "next: done");
+    assert!(
+        cli_std::chainable::assert_chainable(stdout).is_ok(),
+        "cli_std::chainable::assert_chainable failed for upgrade --check"
+    );
+}
+
+#[test]
+#[cfg(not(feature = "self-update"))]
+fn shared_issue_upgrade_terminal_markers_upgrade_no_flags_offline() {
+    let output = relay(&["upgrade"]);
+    assert!(
+        !output.status.success(),
+        "relay upgrade without self-update support should fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("compiled without self-update support"),
+        "missing expected error message in stderr: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.lines().any(|line| line.trim().starts_with("next:")),
+        "no next: line is required on failed upgrade: {stdout}"
+    );
+}
 // HANDWRITE-END
