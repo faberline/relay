@@ -153,4 +153,82 @@ fn ack_mode_hole_pins_head() {
     assert!(log.entry(0).unwrap().is_some());
 }
 
+// The following tests observe segment rotation and retention recovery for claim
+// segment-rotation-and-retention-recovery:
+// - segment_rotation_and_retention_recovery_pruned_reopen
+// - segment_rotation_and_retention_recovery_append_after_prune
+//
+// claim: segment-rotation-and-retention-recovery
+// Expected Result: observes segment rotation and retention recovery for claim segment-rotation-and-retention-recovery
+#[test]
+fn segment_rotation_and_retention_recovery_pruned_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = seg_cfg(dir.path(), 200);
+    let recorded_start;
+    let recorded_len;
+    {
+        let mut log = Log::open(&cfg, "s", 0).unwrap();
+        for i in 0..20 {
+            append(&mut log, i);
+        }
+        log.truncate_below_acked(12).unwrap();
+        recorded_start = log.start_seq();
+        recorded_len = log.len();
+        assert!(recorded_start > 0, "start_seq advanced after pruning");
+        assert_eq!(recorded_len, 20);
+    }
+    let log2 = Log::open(&cfg, "s", 0).unwrap();
+    assert_eq!(log2.start_seq(), recorded_start);
+    assert_eq!(log2.len(), 20);
+    assert!(log2.entry(recorded_start - 1).unwrap().is_none());
+    assert_eq!(log2.entry(12).unwrap().unwrap().seq, 12);
+    let all = log2.range(0).unwrap();
+    let seqs: Vec<u64> = all.iter().map(|e| e.seq).collect();
+    let expected: Vec<u64> = (recorded_start..20).collect();
+    assert_eq!(seqs, expected);
+}
+
+// claim: segment-rotation-and-retention-recovery
+// Expected Result: observes segment rotation and retention recovery: append after prune
+#[test]
+fn segment_rotation_and_retention_recovery_append_after_prune() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = seg_cfg(dir.path(), 200);
+    let pruned_segments;
+    {
+        let mut log = Log::open(&cfg, "s", 0).unwrap();
+        for i in 0..20 {
+            append(&mut log, i);
+        }
+        log.truncate_below_acked(12).unwrap();
+        pruned_segments = count_segments(dir.path());
+    }
+    let mut log2 = Log::open(&cfg, "s", 0).unwrap();
+    append(&mut log2, 20);
+    assert_eq!(log2.entry(20).unwrap().unwrap().seq, 20);
+    assert_eq!(log2.range(0).unwrap().last().unwrap().seq, 20);
+    assert!(
+        count_segments(dir.path()) >= pruned_segments,
+        "segment file count does not drop below count after pruning"
+    );
+}
+
+// Phase 1: an un-acked hole still pins the head across reopen.
+#[test]
+fn ack_mode_hole_pins_head_across_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = seg_cfg(dir.path(), 200);
+    {
+        let mut log = Log::open(&cfg, "s", 0).unwrap();
+        for i in 0..20 {
+            append(&mut log, i);
+        }
+        log.truncate_below_acked(0).unwrap();
+        assert_eq!(log.start_seq(), 0);
+    }
+    let log2 = Log::open(&cfg, "s", 0).unwrap();
+    assert_eq!(log2.start_seq(), 0);
+    assert_eq!(log2.len(), 20);
+}
+
 // HANDWRITE-END
