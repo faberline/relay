@@ -28,8 +28,10 @@ about workflows.
 | Verb | Endpoint | Purpose |
 |------|----------|---------|
 | lease | `POST /v1/{subject}/lease` | Lease the next ready entry (prefers redelivery). Returns a `Lease` carrying a monotonic `epoch`, or `null`. |
+| lease-batch | `POST /v1/{subject}/lease-batch` | Lease up to `max` ready entries in one call (deprecated in favor of `/consume`). |
 | heartbeat | `POST /v1/{subject}/heartbeat` | Extend a held lease (`lease_id` + `epoch`); proves the worker is alive. |
 | ack | `POST /v1/{subject}/ack` | Complete a lease (`lease_id` + `epoch`). A stale `epoch` is a no-op. |
+| ack-batch | `POST /v1/{subject}/ack-batch` | Complete up to `max` held leases in one call (deprecated in favor of `/consume`). |
 
 JSON is the documented shape; `lease` / `ack` / `heartbeat` also accept
 `application/cbor` for the hot path.
