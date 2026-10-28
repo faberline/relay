@@ -409,4 +409,132 @@ fn backup_cron_job_renders_only_when_policy_set() {
          tagged-union BackupDestination)"
     );
 }
+
+#[test]
+fn operator_render_preserves_raft_service_topology_links() {
+    let relay = Relay::new("relay", spec(3));
+    let objs = render(&relay);
+
+    let sts = of_kind(&objs, "StatefulSet");
+    let headless = objs
+        .iter()
+        .find(|o| o["kind"] == "Service" && o["spec"]["clusterIP"] == "None")
+        .expect("render must produce a headless Service with clusterIP: None");
+    let client = objs
+        .iter()
+        .find(|o| o["kind"] == "Service" && o["spec"]["type"] == "ClusterIP")
+        .expect("render must produce a client Service with type: ClusterIP");
+    let pdb = of_kind(&objs, "PodDisruptionBudget");
+
+    // StatefulSet serviceName equals the headless Service name
+    assert_eq!(
+        sts["spec"]["serviceName"], headless["metadata"]["name"],
+        "StatefulSet spec.serviceName must match headless Service metadata.name"
+    );
+
+    // Headless Service has clusterIP: None and publishNotReadyAddresses: true
+    assert_eq!(
+        headless["spec"]["clusterIP"], "None",
+        "Headless Service spec.clusterIP must be None"
+    );
+    assert_eq!(
+        headless["spec"]["publishNotReadyAddresses"], true,
+        "Headless Service spec.publishNotReadyAddresses must be true"
+    );
+
+    // StatefulSet container ports
+    let container = &sts["spec"]["template"]["spec"]["containers"][0];
+    let container_ports = container["ports"]
+        .as_array()
+        .expect("StatefulSet container must have ports array");
+    let http_container_port = container_ports
+        .iter()
+        .find(|p| p["containerPort"] == 7000)
+        .expect("StatefulSet container must have port 7000");
+    let raft_container_port = container_ports
+        .iter()
+        .find(|p| p["containerPort"] == 7001)
+        .expect("StatefulSet container must have port 7001");
+
+    assert_eq!(
+        http_container_port["name"], "http",
+        "StatefulSet container port 7000 name must be http"
+    );
+    assert_eq!(
+        raft_container_port["name"], "raft",
+        "StatefulSet container port 7001 name must be raft"
+    );
+
+    // Headless Service has http 7000 / raft 7001 ports targeting container port names
+    let headless_ports = headless["spec"]["ports"]
+        .as_array()
+        .expect("Headless Service must have ports array");
+    let headless_http = headless_ports
+        .iter()
+        .find(|p| p["port"] == 7000)
+        .expect("Headless Service must expose port 7000");
+    let headless_raft = headless_ports
+        .iter()
+        .find(|p| p["port"] == 7001)
+        .expect("Headless Service must expose port 7001");
+
+    assert_eq!(
+        headless_http["targetPort"], http_container_port["name"],
+        "Headless Service http targetPort must match StatefulSet container port name"
+    );
+    assert_eq!(
+        headless_raft["targetPort"], raft_container_port["name"],
+        "Headless Service raft targetPort must match StatefulSet container port name"
+    );
+
+    // RELAY_PEER_SERVICE equals the headless name
+    let env = env_of(sts);
+    let peer_service_env = env
+        .iter()
+        .find(|(k, _)| *k == "RELAY_PEER_SERVICE")
+        .expect("StatefulSet container must have RELAY_PEER_SERVICE env var")
+        .1;
+    assert_eq!(
+        peer_service_env["value"], headless["metadata"]["name"],
+        "Container env RELAY_PEER_SERVICE must match headless Service metadata.name"
+    );
+
+    // Client Service, PDB, and StatefulSet selectors match the pod labels
+    let pod_labels = sts["spec"]["template"]["metadata"]["labels"]
+        .as_object()
+        .expect("StatefulSet pod template labels object");
+    let sts_selector = sts["spec"]["selector"]["matchLabels"]
+        .as_object()
+        .expect("StatefulSet selector.matchLabels object");
+    let client_selector = client["spec"]["selector"]
+        .as_object()
+        .expect("Client Service selector object");
+    let pdb_selector = pdb["spec"]["selector"]["matchLabels"]
+        .as_object()
+        .expect("PDB selector.matchLabels object");
+
+    for (name, selector) in [
+        ("StatefulSet", sts_selector),
+        ("Client Service", client_selector),
+        ("PDB", pdb_selector),
+    ] {
+        assert!(!selector.is_empty(), "{name} selector must not be empty");
+        for (k, v) in selector {
+            assert_eq!(
+                pod_labels.get(k),
+                Some(v),
+                "{name} selector label {k}={v} must match pod template label"
+            );
+        }
+    }
+
+    assert_eq!(
+        client["spec"]["selector"], sts["spec"]["selector"]["matchLabels"],
+        "Client Service selector must match StatefulSet selector.matchLabels"
+    );
+    assert_eq!(
+        pdb["spec"]["selector"]["matchLabels"], sts["spec"]["selector"]["matchLabels"],
+        "PDB selector.matchLabels must match StatefulSet selector.matchLabels"
+    );
+}
 // HANDWRITE-END
