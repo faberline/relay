@@ -72,3 +72,103 @@ fn aw_ec_parse_cargo_running_test_count(line: &str) -> Option<usize> {
     number.trim().parse().ok()
 }
 // CODEGEN-END
+
+fn workspace_root() -> std::path::PathBuf {
+    let mut root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    while !root.join("vat.toml").is_file() {
+        assert!(
+            root.pop(),
+            "vat.toml: no workspace root found above {}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+    }
+    root
+}
+
+#[test]
+fn vat_meter_throughput_gate_wiring_chain() {
+    let root = workspace_root();
+
+    let vat_path = root.join("vat.toml");
+    let vat_content = std::fs::read_to_string(&vat_path)
+        .unwrap_or_else(|e| panic!("vat.toml: failed to read: {e}"));
+    assert!(
+        vat_content.contains("id = \"meter-perf\""),
+        "vat.toml: missing runner with id = \"meter-perf\""
+    );
+    let runner_section = vat_content
+        .split("[[runners]]")
+        .find(|s| s.contains("id = \"meter-perf\""))
+        .expect("vat.toml: missing [[runners]] block containing id = \"meter-perf\"");
+    assert!(
+        runner_section.contains("scripts/ec-evidence.sh"),
+        "vat.toml: runner meter-perf cmd missing scripts/ec-evidence.sh"
+    );
+    assert!(
+        runner_section.contains("performance-efficiency"),
+        "vat.toml: runner meter-perf cmd missing performance-efficiency"
+    );
+
+    let meter_path = root.join("meter-relay-performance.toml");
+    let meter_content = std::fs::read_to_string(&meter_path)
+        .unwrap_or_else(|e| panic!("meter-relay-performance.toml: failed to read: {e}"));
+    assert!(
+        meter_content
+            .lines()
+            .any(|l| l.trim() == "delegate_command = \"vat run meter-perf\""),
+        "meter-relay-performance.toml: missing delegate_command = \"vat run meter-perf\""
+    );
+
+    let aw_path = root.join("aw.toml");
+    let aw_content = std::fs::read_to_string(&aw_path)
+        .unwrap_or_else(|e| panic!("aw.toml: failed to read: {e}"));
+    let ec_efficiency = aw_content
+        .split('[')
+        .find(|s| s.starts_with("ec.efficiency]"))
+        .expect("aw.toml: missing [ec.efficiency] section");
+    assert!(
+        ec_efficiency
+            .lines()
+            .any(|l| l.trim() == "command = \"vat run meter-perf\""),
+        "aw.toml: [ec.efficiency] missing command = \"vat run meter-perf\""
+    );
+
+    let ec_path = root.join("scripts/ec-evidence.sh");
+    let ec_content = std::fs::read_to_string(&ec_path)
+        .unwrap_or_else(|e| panic!("scripts/ec-evidence.sh: failed to read: {e}"));
+    assert!(
+        ec_content
+            .lines()
+            .any(|l| l.trim().starts_with("performance-efficiency)")),
+        "scripts/ec-evidence.sh: missing performance-efficiency) case arm"
+    );
+}
+
+#[test]
+fn ec_evidence_and_measured_performance_gate_definitions() {
+    let root = workspace_root();
+
+    let ec_path = root.join("scripts/ec-evidence.sh");
+    let ec_content = std::fs::read_to_string(&ec_path)
+        .unwrap_or_else(|e| panic!("scripts/ec-evidence.sh: failed to read: {e}"));
+    assert!(
+        ec_content.contains("measured_performance::measured_durable_lifecycle_gate"),
+        "scripts/ec-evidence.sh: missing measured_performance::measured_durable_lifecycle_gate"
+    );
+
+    let mp_path = root.join("crates/relay/tests/it/measured_performance.rs");
+    let mp_content = std::fs::read_to_string(&mp_path).unwrap_or_else(|e| {
+        panic!("crates/relay/tests/it/measured_performance.rs: failed to read: {e}")
+    });
+    let fn_offset = mp_content
+        .find("fn measured_durable_lifecycle_gate")
+        .expect(
+        "crates/relay/tests/it/measured_performance.rs: missing fn measured_durable_lifecycle_gate",
+    );
+    let prefix = &mp_content[..fn_offset];
+    let last_attr_block = prefix.lines().rev().take(10).collect::<Vec<_>>().join("\n");
+    assert!(
+        last_attr_block.contains("#[ignore"),
+        "crates/relay/tests/it/measured_performance.rs: fn measured_durable_lifecycle_gate missing #[ignore] attribute"
+    );
+}
