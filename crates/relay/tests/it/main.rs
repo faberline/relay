@@ -10,6 +10,7 @@ mod behavior_relay_competitor_performance_behavior;
 mod behavior_relay_security_hardening_auth_and_admission_behavior;
 mod bounded_log;
 mod cli_contract;
+mod cli_spec_codegen_cold_regen;
 mod delayed_delivery;
 mod deploy_cli;
 mod direct_k8s_assets;
