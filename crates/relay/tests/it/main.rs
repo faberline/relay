@@ -20,6 +20,7 @@ mod http2_transport;
 mod measured_performance;
 mod multi_shard;
 mod operator;
+mod ordered_log_raft_breadth;
 mod perf_gate;
 mod priority;
 mod raft_cluster;
