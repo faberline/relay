@@ -5,6 +5,10 @@ pull request head and base. It runs every enabled library and binary unit target
 for each declared feature profile. It compares each nonempty execution roster
 with the harness discovery lists before and after the run. A release run for
 ignored tests must also include every debug test name and match its own lists.
+The planner checks both checkouts for tracked and non-ignored untracked changes
+before and after metadata generation and product commands. A detected change
+fails the job. This does not prove that files cannot change and be restored
+during a run.
 Optional dependency feature activation selects the corresponding required
 binary; a weak dependency feature alone does not. It also runs workspace
 formatting and all-target Clippy.
