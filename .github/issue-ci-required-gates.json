@@ -1,5 +1,5 @@
 {
-  "aw_revision": "28637704225692e5a1766b9c6b9778ef2b52e155",
+  "aw_revision": "8e2e93e5ba8feb30b6668de39139980ea3bb085c",
   "qualification_blockers": [
     "No automatically enforced affected performance PR qualification gate exists.",
     "The existing path-filtered GKE suite is partial e2e coverage; affected functional/e2e selection and docs-only applicability require a reviewed policy. Missing or skipped GKE runs cannot qualify done."
@@ -47,13 +47,13 @@
     ],
     "lifecycle_mode": "failure-only"
   },
-  "controller_source": "faberline/aw@28637704225692e5a1766b9c6b9778ef2b52e155:plugins/faberline/skills/issue-ci/scripts/native_merge.py",
+  "controller_source": "faberline/aw@8e2e93e5ba8feb30b6668de39139980ea3bb085c:plugins/faberline/skills/issue-ci/scripts/native_merge.py",
   "claude_final_review": {
     "version": 1,
     "producer": {
       "path": ".github/workflows/claude-final-review.yml",
       "id": 399790575,
-      "definition_sha": "399146e686a20d9ab5a7def3e4d7c3461be3a45e",
+      "definition_sha": "0946fdcccd1b9d56a45e4643d9fb5e562fb89971",
       "job": "review"
     },
     "gates": {
@@ -94,7 +94,7 @@
     "producer": {
       "path": ".github/workflows/issue-ci.yml",
       "id": 394215454,
-      "definition_sha": "82a6dd907afb448bd95ebb46c59895c823d6a231",
+      "definition_sha": "31846447de9b4058ab8d49c6fd2b50c74ea8dc7d",
       "job": "native-auto-merge"
     }
   }
