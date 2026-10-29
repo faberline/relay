@@ -2,8 +2,12 @@
 
 The candidate workflow inventories the complete Cargo workspace from the exact
 pull request head and base. It runs every enabled library and binary unit target
-for each declared feature profile. It requires complete, nonempty named test
-rosters. It also runs workspace formatting and all-target Clippy.
+for each declared feature profile. It compares each nonempty execution roster
+with the harness discovery lists before and after the run. A release run for
+ignored tests must also include every debug test name and match its own lists.
+Optional dependency feature activation selects the corresponding required
+binary; a weak dependency feature alone does not. It also runs workspace
+formatting and all-target Clippy.
 
 These are ordinary read-only PR checks. They do not approve their own policy or
 replace existing Relay CI, GKE, functional, E2E or performance evidence. The
