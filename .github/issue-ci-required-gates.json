@@ -59,11 +59,11 @@
     "gates": {
       ".github/workflows/relay-ci.yml": {
         "id": 389626028,
-        "definition_sha": "f70311617760c226c8dadc6414317412d55e1b7b"
+        "definition_sha": "1bc5f5ad54c2e463b952da9be510d659130cb857"
       },
       ".github/workflows/gke-test.yml": {
         "id": 390094154,
-        "definition_sha": "855370ddb37cb2ebe74b73aefde33812f4bfa123"
+        "definition_sha": "52864995302e0c90d754027a3791ef6181e5b74b"
       }
     },
     "protected_paths": [

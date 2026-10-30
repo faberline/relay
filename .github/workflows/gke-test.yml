@@ -48,8 +48,17 @@ permissions:
   contents: read
 
 jobs:
+  unit-static:
+    name: required unit and static checks
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/pr-unit-static.yml
+
   image:
     name: build server image
+    needs: unit-static
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.unit-static.result == 'success') }}
     permissions:
       contents: read
       packages: write
@@ -57,6 +66,8 @@ jobs:
 
   test-client:
     name: build test-client image
+    needs: unit-static
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.unit-static.result == 'success') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
