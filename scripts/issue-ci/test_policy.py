@@ -21,11 +21,16 @@ class ConsumerPolicyTests(unittest.TestCase):
         expected = [{'path': '.github/workflows/relay-ci.yml', 'jobs': ['fmt, clippy, tests, release contract']}, {'path': '.github/workflows/gke-test.yml', 'jobs': ['build server image / build + publish ghcr test image', 'build test-client image', 'resolve image identity', 'GKE e2e (raft_failover) / deploy + test on shared GKE']}]
         self.assertEqual(self.config['workflows'], expected)
         workflow = (ROOT / '.github/workflows/issue-ci.yml').read_text()
-        self.assertIn('workflows: ["relay-ci", "gke-test"]', workflow)
-        self.assertLess(workflow.index('python3 scripts/issue-ci/check-policy.py'), workflow.index('python3 scripts/issue-ci/handoff.py'))
-        self.assertIn('ref: ${{ github.event.repository.default_branch }}', workflow)
-        self.assertNotIn('pull_request_target', workflow)
+        self.assertIn('workflows: ["relay-ci", "gke-test", "Claude final review"]', workflow)
+        self.assertIn('group: issue-ci-handoff', workflow)
+        self.assertIn('branches: [main]', workflow)
+        self.assertIn('faberline/aw/.github/actions/native-auto-merge@8e2e93e5ba8feb30b6668de39139980ea3bb085c', workflow)
+        self.assertNotIn('actions/checkout@', workflow)
         self.assertNotIn('download-artifact', workflow)
+        self.assertNotIn('CLAUDE_CODE_OAUTH_TOKEN', workflow)
+        self.assertEqual(self.config['ci_handoff_policy']['workflows'], expected)
+        self.assertEqual(self.config['ci_handoff_policy']['lifecycle_mode'], 'failure-only')
+        self.assertEqual(self.config['ci_handoff_policy']['qualification_blockers'], self.config['qualification_blockers'])
 
     def test_every_real_workflow_and_job_is_required(self):
         gates = self.config['workflows']
