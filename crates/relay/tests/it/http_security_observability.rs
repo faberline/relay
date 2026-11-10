@@ -246,9 +246,14 @@ async fn http_security_observability_journey() {
         .trim()
         .parse()
         .expect("observability: relay_publish_requests_total must have integer count");
-    assert!(
-        total_count > 0,
-        "observability: relay_publish_requests_total must be > 0 (zero-work run must fail), got {total_count}"
+    // Counted before /metrics is read: the 401 (no token), 401 (unknown token),
+    // 403 (read-only token) and 200 (writer publish). The request-metrics layer
+    // sits outside the auth layer, so rejected requests are counted. The 429 is
+    // rejected by the admission layer, which sits outside the metrics layer, so
+    // it is not counted.
+    assert_eq!(
+        total_count, 4,
+        "observability: relay_publish_requests_total must equal the 4 counted publish requests, got {total_count}"
     );
 
     let latency_line = metrics_body
@@ -261,6 +266,10 @@ async fn http_security_observability_journey() {
         .trim()
         .parse()
         .expect("observability: relay_publish_latency_ms_count must have integer count");
+    assert_eq!(
+        latency_count, 4,
+        "observability: relay_publish_latency_ms_count must equal the 4 counted publish requests, got {latency_count}"
+    );
     assert_eq!(
         total_count, latency_count,
         "observability: relay_publish_requests_total ({total_count}) and relay_publish_latency_ms_count ({latency_count}) must match"
