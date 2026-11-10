@@ -5,7 +5,7 @@
 //!
 //! On Faberline's shared GKE test cluster the test Job in
 //! `k8s/gke-test-job/<suite>/` runs this binary next to the deploy of
-//! `k8s/overlays/gke-test` (`.github/workflows/gke-test.yml`). Cluster actions
+//! `k8s/overlays/gke-test` (`.github/workflows/ci.yml`). Cluster actions
 //! are `kubectl` calls in the Job's namespace; every check is here in Rust,
 //! and each step prints one `E2E_EVIDENCE {json}` line to stdout.
 
@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 
 /// Every suite, by module name. Each one needs a Job folder
 /// `k8s/gke-test-job/<suite>/` whose filter is `e2e::<suite>::`, and an entry
-/// in `.github/workflows/gke-test.yml`; [`every_suite_has_a_job_with_its_filter`]
+/// in `.github/workflows/ci.yml`; [`every_suite_has_a_job_with_its_filter`]
 /// checks the Job side.
 const SUITES: &[&str] = &["raft_failover"];
 
@@ -315,7 +315,7 @@ fn every_suite_has_a_job_with_its_filter() {
     suites.sort();
     assert_eq!(folders, suites, "k8s/gke-test-job/ folders and e2e SUITES");
 
-    let workflow = std::fs::read_to_string(root.join(".github/workflows/gke-test.yml")).unwrap();
+    let workflow = std::fs::read_to_string(root.join(".github/workflows/ci.yml")).unwrap();
     let here = crate_dir.join("tests/it/e2e");
     for suite in SUITES {
         let job = std::fs::read_to_string(jobs.join(suite).join("job.yaml")).unwrap();
@@ -333,8 +333,8 @@ fn every_suite_has_a_job_with_its_filter() {
             "e2e/{suite}.rs has no #[ignore = \"e2e: needs E2E_ENDPOINT\"] test"
         );
         assert!(
-            workflow.contains(&format!("\"{suite}\"")),
-            ".github/workflows/gke-test.yml does not run suite {suite}"
+            workflow.contains(&format!("k8s/gke-test-job/{suite}")),
+            ".github/workflows/ci.yml does not run suite {suite}"
         );
     }
 }
