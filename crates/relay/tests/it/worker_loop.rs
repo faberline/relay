@@ -158,6 +158,9 @@ fn stdout_relay_cli(args: &[&str]) -> String {
     String::from_utf8(out.stdout).expect("utf8 stdout")
 }
 
+// Expected Result: observes http worker protocol parity (claim http-worker-protocol-parity): served OpenAPI/relay spec twins, epoch fencing, empty-queue lease, CBOR round trip.
+// Tests: worker_fencing_epoch_rejected_without_consuming_lease, empty_queue_returns_null_lease_and_duplicate_ack_returns_false, served_openapi_and_cli_spec_paths_and_worker_ops_match, worker_lease_and_ack_cbor_round_trip.
+
 // Wrong epoch on heartbeat and ack is rejected; valid lease is retained and ackable with the right epoch.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn worker_fencing_epoch_rejected_without_consuming_lease() {
