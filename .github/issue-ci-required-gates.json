@@ -1,5 +1,5 @@
 {
-  "aw_revision": "67af8d020df3ca2ec4b064289408cfb0c2f8b299",
+  "aw_revision": "28637704225692e5a1766b9c6b9778ef2b52e155",
   "qualification_blockers": [
     "No automatically enforced affected performance PR qualification gate exists.",
     "The existing path-filtered GKE suite is partial e2e coverage; affected functional/e2e selection and docs-only applicability require a reviewed policy. Missing or skipped GKE runs cannot qualify done."
@@ -21,5 +21,81 @@
       ]
     }
   ],
-  "lifecycle_mode": "failure-only"
+  "lifecycle_mode": "failure-only",
+  "ci_handoff_policy": {
+    "aw_revision": "67af8d020df3ca2ec4b064289408cfb0c2f8b299",
+    "qualification_blockers": [
+      "No automatically enforced affected performance PR qualification gate exists.",
+      "The existing path-filtered GKE suite is partial e2e coverage; affected functional/e2e selection and docs-only applicability require a reviewed policy. Missing or skipped GKE runs cannot qualify done."
+    ],
+    "workflows": [
+      {
+        "path": ".github/workflows/relay-ci.yml",
+        "jobs": [
+          "fmt, clippy, tests, release contract"
+        ]
+      },
+      {
+        "path": ".github/workflows/gke-test.yml",
+        "jobs": [
+          "build server image / build + publish ghcr test image",
+          "build test-client image",
+          "resolve image identity",
+          "GKE e2e (raft_failover) / deploy + test on shared GKE"
+        ]
+      }
+    ],
+    "lifecycle_mode": "failure-only"
+  },
+  "controller_source": "faberline/aw@28637704225692e5a1766b9c6b9778ef2b52e155:plugins/faberline/skills/issue-ci/scripts/native_merge.py",
+  "claude_final_review": {
+    "version": 1,
+    "producer": {
+      "path": ".github/workflows/claude-final-review.yml",
+      "id": 399790575,
+      "definition_sha": "399146e686a20d9ab5a7def3e4d7c3461be3a45e",
+      "job": "review"
+    },
+    "gates": {
+      ".github/workflows/relay-ci.yml": {
+        "id": 389626028,
+        "definition_sha": "f70311617760c226c8dadc6414317412d55e1b7b"
+      },
+      ".github/workflows/gke-test.yml": {
+        "id": 390094154,
+        "definition_sha": "855370ddb37cb2ebe74b73aefde33812f4bfa123"
+      }
+    },
+    "protected_paths": [
+      "scripts/issue-ci/",
+      "scripts/pr-gates/",
+      "scripts/gke-test/",
+      "acceptance/gcp/",
+      "k8s/",
+      "Cargo.toml",
+      "Cargo.lock",
+      ".cargo/",
+      "rust-toolchain",
+      "rust-toolchain.toml",
+      "Dockerfile.test"
+    ],
+    "cli_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "credential_profile": "personal-claude-max-oauth",
+    "merge_producer": null,
+    "merge_method": null
+  },
+  "native_auto_merge": {
+    "version": 1,
+    "enabled": true,
+    "status_context": "claude/verified-merge",
+    "status_app_id": 15368,
+    "merge_method": "SQUASH",
+    "ruleset_id": 26069041,
+    "producer": {
+      "path": ".github/workflows/issue-ci.yml",
+      "id": 394215454,
+      "definition_sha": "82a6dd907afb448bd95ebb46c59895c823d6a231",
+      "job": "native-auto-merge"
+    }
+  }
 }
