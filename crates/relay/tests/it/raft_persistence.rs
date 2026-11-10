@@ -318,7 +318,8 @@ fn state_machine_snapshot_restore_round_trip_and_persisted_marker_floor() {
 /// Covered directly via RelayStateMachine::apply with serialized envelope bytes
 /// (matching private RelayEnvelope JSON schema), verifying completed_proposals
 /// cache is restored and prevents double-application without requiring a running
-/// Raft cluster/host.
+/// Raft cluster/host. The replay uses a different message_id so engine dedupe
+/// cannot satisfy the test on its own.
 #[test]
 fn state_machine_completed_proposals_restored_prevent_double_apply() {
     let engine_a = Arc::new(Relay::new(RelayCoreConfig::in_memory()));
@@ -353,8 +354,21 @@ fn state_machine_completed_proposals_restored_prevent_double_apply() {
     assert_eq!(sm_b.applied_index(), 1);
     assert_eq!(engine_b.log_len("s").unwrap(), 1);
 
-    // Replay same proposal at index 2
-    sm_b.apply(2, &cmd_bytes).unwrap();
+    // Replay the same proposal id at index 2 with a different message_id, so
+    // the engine's message_id dedupe cannot mask a missing completed_proposals cache.
+    let other_envelope = serde_json::json!({
+        "proposal_id": {
+            "node": 1,
+            "session": 100,
+            "sequence": 1
+        },
+        "command": {
+            "op": "publish",
+            "command": cmd("m-other")
+        }
+    });
+    let other_bytes = serde_json::to_vec(&other_envelope).unwrap();
+    sm_b.apply(2, &other_bytes).unwrap();
     // Engine must NOT have a second entry
     assert_eq!(
         engine_b.log_len("s").unwrap(),
@@ -363,11 +377,15 @@ fn state_machine_completed_proposals_restored_prevent_double_apply() {
     );
     assert_eq!(sm_b.applied_index(), 2);
 
-    // Cached outcome is returned via claim_outcome
+    // Cached outcome is returned via claim_outcome, not an engine dedupe
     let outcome2 = sm_b.claim_outcome(2).expect("cached outcome on B");
     match (&outcome1, &outcome2) {
         (RelayOutcome::Published(o1), RelayOutcome::Published(o2)) => {
             assert_eq!(o1.seq, o2.seq);
+            assert!(
+                !o2.deduped,
+                "cached outcome must be A's original, not an engine dedupe"
+            );
         }
         _ => panic!("outcomes mismatch: {outcome1:?} vs {outcome2:?}"),
     }
