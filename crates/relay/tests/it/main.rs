@@ -9,6 +9,7 @@ mod backup;
 mod behavior_relay_competitor_performance_behavior;
 mod behavior_relay_security_hardening_auth_and_admission_behavior;
 mod bounded_log;
+mod capacity_policy;
 mod cli_contract;
 mod cli_spec_codegen_cold_regen;
 mod delayed_delivery;
