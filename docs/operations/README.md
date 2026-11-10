@@ -8,6 +8,7 @@ How to run, configure, and test relay.
 | [ha.md](../ha.md) | Auto-mode raft HA, snapshots and the applied floor, the operator CR, backup and restore, and peer TLS. |
 | [worker-protocol.md](../worker-protocol.md) | The HTTP/2 + OpenAPI contract that workers in any language use. |
 | [perf-gate.md](../perf-gate.md) | The competitor perf gate and how to run it. |
+| [container-kustomize-verification.md](container-kustomize-verification.md) | The offline gate for the container and Kustomize artifacts and its last result. |
 
 ## Tests
 
