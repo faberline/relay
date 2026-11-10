@@ -38,6 +38,7 @@ mod sparse_index;
 mod spec_cli;
 mod stability_relay_competitor_performance_bounded_soak;
 mod stability_relay_security_hardening_rotation_and_peer_stability;
+mod verify_competitor_efficiency_script;
 mod verify_restart_failover_soak_script;
 mod work_queue_api;
 mod work_queue_throughput;

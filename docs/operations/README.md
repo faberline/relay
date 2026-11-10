@@ -9,6 +9,7 @@ How to run, configure, and test relay.
 | [worker-protocol.md](../worker-protocol.md) | The HTTP/2 + OpenAPI contract that workers in any language use. |
 | [perf-gate.md](../perf-gate.md) | The competitor perf gate and how to run it. |
 | [restart-failover-soak.md](restart-failover-soak.md) | The restart, persistence, backup and bounded soak gate (`scripts/verify-restart-failover-soak.sh`) and its last recorded result. |
+| [competitor-efficiency.md](competitor-efficiency.md) | The local competitor semantics and efficiency gate (`scripts/verify-competitor-efficiency.sh`) and its last recorded result. |
 
 ## Tests
 
