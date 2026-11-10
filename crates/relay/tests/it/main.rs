@@ -21,6 +21,7 @@ mod http_security_observability;
 mod measured_performance;
 mod multi_shard;
 mod operator;
+mod ownership_contract;
 mod perf_gate;
 mod priority;
 mod raft_cluster;
