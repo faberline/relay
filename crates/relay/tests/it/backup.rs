@@ -9,10 +9,10 @@
 //! Harness: the shared service shell's serve loop on an ephemeral loopback
 //! port (the `http2_transport.rs` pattern), driven with plain reqwest.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use serde_json::json;
@@ -282,25 +282,34 @@ async fn run_backup_ships_snapshot_to_local_sink() {
 /// R1 / AC3 (WI #17): `GET /admin/backup` on a node under concurrent publish,
 /// lease, and ack traffic returns a snapshot that restores to a self-consistent
 /// engine: the restored state equals a real prefix of writes (committed_seq
-/// never rewinds, matches a prefix of writer acks, un-acked entries are
-/// leasable with original payloads, and fresh publish assigns next seq).
-#[tokio::test]
+/// never rewinds and never passes the writer's acks, the un-acked seqs above it
+/// are exactly the contiguous range, each leasable once with its original
+/// payload, and a fresh publish assigns the next seq).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
     let topic = "jobs";
     let state = AppState::new(RelayServerConfig::ephemeral(), 8 * 1024 * 1024);
     let addr = start_server_with_state(state.clone()).await;
 
     let stop = Arc::new(AtomicBool::new(false));
-    let highest_acked = Arc::new(AtomicI64::new(-1));
+    // Highest seq the writer has acked. The writer updates it while holding the
+    // lock across the ack, so a reader that takes the lock after a snapshot has
+    // returned sees every ack that snapshot can contain.
+    let highest_acked = Arc::new(Mutex::new(-1_i64));
 
     let stop_writer = Arc::clone(&stop);
     let highest_acked_writer = Arc::clone(&highest_acked);
     let relay = state.relay_handle();
 
-    let writer_handle = tokio::spawn(async move {
+    // The writer runs on a blocking thread, so its engine calls run in parallel
+    // with the backup handler on the server's worker threads. It keeps up to two
+    // leases in flight between iterations, so snapshots land between a lease and
+    // its ack.
+    let writer_handle = tokio::task::spawn_blocking(move || {
         let mut pub_seq = 0u64;
+        let mut in_flight = VecDeque::new();
         while !stop_writer.load(Ordering::Relaxed) {
-            let pub_res = relay
+            relay
                 .publish(
                     topic,
                     &format!("m-{pub_seq}"),
@@ -309,22 +318,27 @@ async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
                     Utc::now(),
                 )
                 .unwrap();
-            let _ = pub_res.seq;
             pub_seq += 1;
 
-            if pub_seq > 2 {
-                if let Some(lease) = relay.lease(topic, "writer-worker", Utc::now()).unwrap() {
-                    let seq = lease.seq;
-                    let acked = relay
-                        .ack(topic, &lease.lease_id, Some(lease.epoch))
-                        .unwrap();
-                    if acked {
-                        highest_acked_writer.fetch_max(seq as i64, Ordering::SeqCst);
-                    }
+            if let Some(lease) = relay.lease(topic, "writer-worker", Utc::now()).unwrap() {
+                in_flight.push_back(lease);
+            }
+            // Ack the oldest lease only when more than two are in flight. Leases
+            // come out in seq order, so acks go in seq order too.
+            if in_flight.len() > 2 {
+                let lease = in_flight.pop_front().unwrap();
+                let seq = lease.seq;
+                let mut highest = highest_acked_writer.lock().unwrap();
+                let acked = relay
+                    .ack(topic, &lease.lease_id, Some(lease.epoch))
+                    .unwrap();
+                if acked {
+                    *highest = (*highest).max(seq as i64);
                 }
             }
-
-            tokio::task::yield_now().await;
+            // Pace the writer so the engine stays small enough to snapshot and
+            // restore in the test, while it still runs throughout the fetches.
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
     });
 
@@ -334,51 +348,54 @@ async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
 
     for artifact_idx in 0..20 {
         let resp = client.get(&url).send().await.unwrap();
-        let curr_seq_marker = prev_committed_seq.unwrap_or(0);
         assert_eq!(
             resp.status(),
             200,
-            "artifact {artifact_idx}, seq {curr_seq_marker}: backup fetch status 200"
+            "artifact {artifact_idx}, seq {}: backup fetch status 200",
+            prev_committed_seq.unwrap_or(0)
         );
         let bytes = resp.bytes().await.unwrap();
-        let max_acked_at_fetch = highest_acked.load(Ordering::SeqCst);
+        // Read after the snapshot has returned: the writer's lock makes this an
+        // upper bound on the acks that the snapshot can contain.
+        let max_acked_at_fetch = *highest_acked.lock().unwrap();
 
         let restored = Relay::new(RelayCoreConfig::in_memory());
         let up_to = relay::load_snapshot_bytes(&restored, &bytes).unwrap();
-        assert_eq!(
-            up_to, 0,
-            "artifact {artifact_idx}, seq {curr_seq_marker}: applied index is 0"
-        );
+        assert_eq!(up_to, 0, "artifact {artifact_idx}: applied index is 0");
 
-        let committed_opt = restored.committed_offset(topic).unwrap();
-        let curr_committed_seq = committed_opt.as_ref().map(|c| c.committed_seq);
-
-        if let Some(ref c) = committed_opt {
+        let committed_seq = restored
+            .committed_offset(topic)
+            .unwrap()
+            .map(|c| c.committed_seq);
+        let seq_marker = committed_seq.unwrap_or(0);
+        if let Some(c) = committed_seq {
             assert!(
-                (c.committed_seq as i64) <= max_acked_at_fetch,
-                "artifact {artifact_idx}, seq {}: committed_seq {} is at most highest acked {}",
-                c.committed_seq,
-                c.committed_seq,
-                max_acked_at_fetch
+                (c as i64) <= max_acked_at_fetch,
+                "artifact {artifact_idx}, seq {c}: committed_seq {c} is above highest acked {max_acked_at_fetch}"
             );
         }
-
-        if let (Some(prev), Some(curr)) = (prev_committed_seq, curr_committed_seq) {
+        if let Some(prev) = prev_committed_seq {
             assert!(
-                curr >= prev,
-                "artifact {artifact_idx}, seq {curr}: committed_seq {curr} never decreases from previous {prev}"
-            );
-        } else if let (Some(prev), None) = (prev_committed_seq, curr_committed_seq) {
-            panic!(
-                "artifact {artifact_idx}, seq 0: committed_seq decreased from Some({prev}) to None"
+                committed_seq.is_some_and(|c| c >= prev),
+                "artifact {artifact_idx}, seq {seq_marker}: committed_seq {seq_marker} decreased from {prev}"
             );
         }
-        if curr_committed_seq.is_some() {
-            prev_committed_seq = curr_committed_seq;
+        if committed_seq.is_some() {
+            prev_committed_seq = committed_seq;
         }
 
+        // Seqs above the restored watermark are the un-acked ones.
+        let first_unacked = committed_seq.map_or(0, |c| c + 1);
         let snap: relay::EngineSnapshot = serde_json::from_slice(&bytes).unwrap();
-        let subj = snap.subjects.iter().find(|s| s.subject == topic);
+        let (next_seq, mut snapshot_unacked) =
+            match snap.subjects.iter().find(|s| s.subject == topic) {
+                Some(s) => (
+                    s.next_seq,
+                    s.entries.iter().map(|e| e.seq).collect::<Vec<u64>>(),
+                ),
+                None => (0, Vec::new()),
+            };
+        snapshot_unacked.sort_unstable();
 
         let mut leased_seqs = Vec::new();
         while let Some(lease) = restored.lease(topic, "verifier", Utc::now()).unwrap() {
@@ -394,32 +411,33 @@ async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
             );
             leased_seqs.push(lease.seq);
         }
+        leased_seqs.sort_unstable();
 
-        if let Some(s) = subj {
-            let expected_unacked: Vec<u64> = s.entries.iter().map(|e| e.seq).collect();
-            let marker_seq = curr_committed_seq.unwrap_or(0);
+        assert_eq!(
+            leased_seqs, snapshot_unacked,
+            "artifact {artifact_idx}, seq {seq_marker}: un-acked entries leased exactly once"
+        );
+        assert_eq!(
+            leased_seqs,
+            (first_unacked..next_seq).collect::<Vec<u64>>(),
+            "artifact {artifact_idx}, seq {seq_marker}: every leased seq is above committed_seq and the range has no gap up to next_seq {next_seq}"
+        );
+
+        if next_seq > 0 {
+            let highest_restored_seq = next_seq - 1;
+            let pub_res = restored
+                .publish(
+                    topic,
+                    &format!("probe-{artifact_idx}"),
+                    json!({"probe": artifact_idx}),
+                    BTreeMap::new(),
+                    Utc::now(),
+                )
+                .unwrap();
             assert_eq!(
-                leased_seqs, expected_unacked,
-                "artifact {artifact_idx}, seq {marker_seq}: un-acked entries leased exactly once"
+                pub_res.seq, next_seq,
+                "artifact {artifact_idx}, seq {highest_restored_seq}: new publish seq == highest restored seq + 1"
             );
-
-            if s.next_seq > 0 {
-                let highest_restored_seq = s.next_seq - 1;
-                let pub_res = restored
-                    .publish(
-                        topic,
-                        &format!("probe-{artifact_idx}"),
-                        json!({"probe": artifact_idx}),
-                        BTreeMap::new(),
-                        Utc::now(),
-                    )
-                    .unwrap();
-                assert_eq!(
-                    pub_res.seq,
-                    highest_restored_seq + 1,
-                    "artifact {artifact_idx}, seq {highest_restored_seq}: new publish seq == highest restored seq + 1"
-                );
-            }
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -463,12 +481,17 @@ async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
     {
         final_restored_unacked.push(lease.seq);
     }
+    final_restored_unacked.sort_unstable();
 
     let live_dumps = state.relay_handle().dump_live().unwrap();
     let live_unacked: Vec<u64> = live_dumps
         .iter()
         .find(|s| s.subject == topic)
-        .map(|s| s.entries.iter().map(|e| e.seq).collect())
+        .map(|s| {
+            let mut seqs: Vec<u64> = s.entries.iter().map(|e| e.seq).collect();
+            seqs.sort_unstable();
+            seqs
+        })
         .unwrap_or_default();
 
     assert_eq!(
