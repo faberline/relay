@@ -9,12 +9,12 @@
 //! Harness: the shared service shell's serve loop on an ephemeral loopback
 //! port (the `http2_transport.rs` pattern), driven with plain reqwest.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use serde_json::json;
 
 use relay::queue::server::{router, AppState};
@@ -279,12 +279,25 @@ async fn run_backup_ships_snapshot_to_local_sink() {
     assert_eq!(snap.subjects[0].entries[0].message_id, "m-1");
 }
 
+/// Sets the writer's stop flag when dropped, so a panic in the main loop stops
+/// the blocking writer instead of keeping the runtime alive until the gate
+/// times out.
+struct StopWriterOnDrop(Arc<AtomicBool>);
+
+impl Drop for StopWriterOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
 /// R1 / AC3 (WI #17): `GET /admin/backup` on a node under concurrent publish,
 /// lease, and ack traffic returns a snapshot that restores to a self-consistent
 /// engine: the restored state equals a real prefix of writes (committed_seq
-/// never rewinds and never passes the writer's acks, the un-acked seqs above it
-/// are exactly the contiguous range, each leasable once with its original
-/// payload, and a fresh publish assigns the next seq).
+/// never rewinds and never passes the writer's acks, every un-acked seq above it
+/// survives the restore with no gap, no seq is leasable twice, and a fresh
+/// publish assigns the next seq). Leases in flight at snapshot time stay held
+/// on the restored engine until their lease expires; they are never lost. A
+/// fresh engine drained with an expiry one day ahead sees every un-acked seq.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
     let topic = "jobs";
@@ -292,6 +305,7 @@ async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
     let addr = start_server_with_state(state.clone()).await;
 
     let stop = Arc::new(AtomicBool::new(false));
+    let _stop_guard = StopWriterOnDrop(Arc::clone(&stop));
     // Highest seq the writer has acked. The writer updates it while holding the
     // lock across the ack, so a reader that takes the lock after a snapshot has
     // returned sees every ack that snapshot can contain.
@@ -345,6 +359,7 @@ async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
     let client = reqwest::Client::new();
     let url = format!("http://{addr}/admin/backup");
     let mut prev_committed_seq: Option<u64> = None;
+    let mut artifacts_with_held = 0usize;
 
     for artifact_idx in 0..20 {
         let resp = client.get(&url).send().await.unwrap();
@@ -397,6 +412,8 @@ async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
             };
         snapshot_unacked.sort_unstable();
 
+        // Drain A: the seqs leasable now on the restored engine. Leases that were
+        // in flight at snapshot time are still held here, so they are not listed.
         let mut leased_seqs = Vec::new();
         while let Some(lease) = restored.lease(topic, "verifier", Utc::now()).unwrap() {
             let entry = restored
@@ -412,15 +429,11 @@ async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
             leased_seqs.push(lease.seq);
         }
         leased_seqs.sort_unstable();
-
+        let leased_unique: BTreeSet<u64> = leased_seqs.iter().copied().collect();
         assert_eq!(
-            leased_seqs, snapshot_unacked,
-            "artifact {artifact_idx}, seq {seq_marker}: un-acked entries leased exactly once"
-        );
-        assert_eq!(
-            leased_seqs,
-            (first_unacked..next_seq).collect::<Vec<u64>>(),
-            "artifact {artifact_idx}, seq {seq_marker}: every leased seq is above committed_seq and the range has no gap up to next_seq {next_seq}"
+            leased_unique.len(),
+            leased_seqs.len(),
+            "artifact {artifact_idx}, seq {seq_marker}: no seq leased twice"
         );
 
         if next_seq > 0 {
@@ -440,8 +453,56 @@ async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
             );
         }
 
+        // Drain B: a second fresh engine from the same bytes, leased with an
+        // expiry one day ahead, so every in-flight lease has expired by then.
+        let late = Relay::new(RelayCoreConfig::in_memory());
+        relay::load_snapshot_bytes(&late, &bytes).unwrap();
+        let mut all_unacked_seqs = Vec::new();
+        while let Some(lease) = late
+            .lease(topic, "verifier-late", Utc::now() + Duration::days(1))
+            .unwrap()
+        {
+            all_unacked_seqs.push(lease.seq);
+        }
+        all_unacked_seqs.sort_unstable();
+
+        assert_eq!(
+            all_unacked_seqs,
+            (first_unacked..next_seq).collect::<Vec<u64>>(),
+            "artifact {artifact_idx}, seq {seq_marker}: every seq above committed_seq up to next_seq {next_seq} survives the restore with no gap"
+        );
+        assert_eq!(
+            all_unacked_seqs, snapshot_unacked,
+            "artifact {artifact_idx}, seq {seq_marker}: restored un-acked seqs match the snapshot entries"
+        );
+
+        for seq in &leased_seqs {
+            assert!(
+                all_unacked_seqs.contains(seq),
+                "artifact {artifact_idx}, seq {seq}: a leasable seq is un-acked after the restore"
+            );
+        }
+        let leased_set: BTreeSet<u64> = leased_seqs.iter().copied().collect();
+        let held: Vec<u64> = all_unacked_seqs
+            .iter()
+            .copied()
+            .filter(|s| !leased_set.contains(s))
+            .collect();
+        assert!(
+            held.len() <= 3,
+            "artifact {artifact_idx}, seq {seq_marker}: held in-flight leases {held:?} exceed the writer's bound of 3"
+        );
+        if !held.is_empty() {
+            artifacts_with_held += 1;
+        }
+
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
+
+    assert!(
+        artifacts_with_held > 0,
+        "no snapshot caught a lease in flight: artifacts_with_held is 0 over 20 fetches"
+    );
 
     stop.store(true, Ordering::Relaxed);
     writer_handle.await.unwrap();
@@ -474,9 +535,12 @@ async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
         "artifact 20, seq {final_seq_marker}: final restored committed_seq matches live engine"
     );
 
+    // Fresh engine, leased with an expiry one day ahead, so in-flight leases count.
+    let final_late = Relay::new(RelayCoreConfig::in_memory());
+    relay::load_snapshot_bytes(&final_late, &final_bytes).unwrap();
     let mut final_restored_unacked = Vec::new();
-    while let Some(lease) = final_restored
-        .lease(topic, "final-verifier", Utc::now())
+    while let Some(lease) = final_late
+        .lease(topic, "final-verifier", Utc::now() + Duration::days(1))
         .unwrap()
     {
         final_restored_unacked.push(lease.seq);
