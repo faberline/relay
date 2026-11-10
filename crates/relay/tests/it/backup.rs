@@ -460,7 +460,11 @@ async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
         let t = Utc::now() + Duration::days(1);
         late.reclaim_expired(topic, t).unwrap();
         let mut all_unacked_seqs = Vec::new();
-        while let Some(lease) = late.lease(topic, "verifier-late", t).unwrap() {
+        // the restored queue keeps its own redelivery backoff; lease after it
+        while let Some(lease) = late
+            .lease(topic, "verifier-late", t + Duration::hours(1))
+            .unwrap()
+        {
             all_unacked_seqs.push(lease.seq);
         }
         all_unacked_seqs.sort_unstable();
@@ -540,7 +544,11 @@ async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
     let final_t = Utc::now() + Duration::days(1);
     final_late.reclaim_expired(topic, final_t).unwrap();
     let mut final_restored_unacked = Vec::new();
-    while let Some(lease) = final_late.lease(topic, "final-verifier", final_t).unwrap() {
+    // the restored queue keeps its own redelivery backoff; lease after it
+    while let Some(lease) = final_late
+        .lease(topic, "final-verifier", final_t + Duration::hours(1))
+        .unwrap()
+    {
         final_restored_unacked.push(lease.seq);
     }
     final_restored_unacked.sort_unstable();
