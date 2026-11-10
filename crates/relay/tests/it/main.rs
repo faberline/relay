@@ -33,6 +33,7 @@ mod security_relay_security_hardening_guard_scan;
 mod security_relay_security_hardening_negative_peer_and_kubernetes_boundaries;
 mod segments;
 mod service_admission;
+mod service_log_stdout;
 mod sparse_index;
 mod spec_cli;
 mod stability_relay_competitor_performance_bounded_soak;
