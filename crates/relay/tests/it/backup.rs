@@ -457,11 +457,10 @@ async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
         // expiry one day ahead, so every in-flight lease has expired by then.
         let late = Relay::new(RelayCoreConfig::in_memory());
         relay::load_snapshot_bytes(&late, &bytes).unwrap();
+        let t = Utc::now() + Duration::days(1);
+        late.reclaim_expired(topic, t).unwrap();
         let mut all_unacked_seqs = Vec::new();
-        while let Some(lease) = late
-            .lease(topic, "verifier-late", Utc::now() + Duration::days(1))
-            .unwrap()
-        {
+        while let Some(lease) = late.lease(topic, "verifier-late", t).unwrap() {
             all_unacked_seqs.push(lease.seq);
         }
         all_unacked_seqs.sort_unstable();
@@ -538,11 +537,10 @@ async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
     // Fresh engine, leased with an expiry one day ahead, so in-flight leases count.
     let final_late = Relay::new(RelayCoreConfig::in_memory());
     relay::load_snapshot_bytes(&final_late, &final_bytes).unwrap();
+    let final_t = Utc::now() + Duration::days(1);
+    final_late.reclaim_expired(topic, final_t).unwrap();
     let mut final_restored_unacked = Vec::new();
-    while let Some(lease) = final_late
-        .lease(topic, "final-verifier", Utc::now() + Duration::days(1))
-        .unwrap()
-    {
+    while let Some(lease) = final_late.lease(topic, "final-verifier", final_t).unwrap() {
         final_restored_unacked.push(lease.seq);
     }
     final_restored_unacked.sort_unstable();
