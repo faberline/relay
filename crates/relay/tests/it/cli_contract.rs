@@ -130,4 +130,76 @@ fn shared_upgrade_issue_surface() {
         );
     }
 }
+/// Close capability claim shared-issue-upgrade-terminal-markers (issue #7):
+/// `relay issue create --dry-run` ends stdout with the chainable marker.
+#[test]
+fn issue_create_dry_run_ends_with_chainable_terminal_marker() {
+    let out = relay(&[
+        "issue",
+        "create",
+        "--dry-run",
+        "chainable",
+        "marker",
+        "probe",
+    ]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let last = stdout
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .expect("issue create dry-run prints output");
+    assert_eq!(last, "next: done");
+    cli_std::chainable::assert_chainable(&stdout).expect("issue create output is chainable");
+    assert!(
+        stdout.contains("app:relay"),
+        "create dry-run output must contain 'app:relay'"
+    );
+}
+
+/// Close capability claim shared-issue-upgrade-terminal-markers (issue #7):
+/// `relay upgrade --check` offline ends stdout with the chainable marker.
+#[cfg(not(feature = "self-update"))]
+#[test]
+fn upgrade_check_offline_ends_with_chainable_terminal_marker() {
+    let out = relay(&["upgrade", "--check"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.contains("latest:  unavailable"),
+        "offline upgrade --check must report latest as unavailable"
+    );
+    let last = stdout
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .expect("upgrade --check prints output");
+    assert_eq!(last, "next: done");
+    cli_std::chainable::assert_chainable(&stdout).expect("upgrade --check output is chainable");
+}
+
+/// Close capability claim shared-issue-upgrade-terminal-markers (issue #7):
+/// `relay upgrade` without self-update support refuses with the stable message.
+#[cfg(not(feature = "self-update"))]
+#[test]
+fn upgrade_without_self_update_refuses_with_stable_message() {
+    let out = relay(&["upgrade"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("compiled without self-update support"),
+        "stderr must say the build lacks self-update support, got: {stderr}"
+    );
+}
+
+/// Negative control for the chainable oracle (issue #7): output with no
+/// `next:` marker and no runnable next command must be rejected.
+#[test]
+fn chainable_oracle_rejects_output_without_terminal_marker() {
+    let output = "repo:  faberline/relay\ntitle: no marker here\n";
+    assert!(
+        cli_std::chainable::assert_chainable(output).is_err(),
+        "assert_chainable must reject output without a next marker"
+    );
+}
 // HANDWRITE-END
