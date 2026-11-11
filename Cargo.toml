@@ -13,7 +13,7 @@ members = ["crates/*"]
 # `version = "` line of this file.
 version = "0.4.13"
 edition = "2021"
-authors = ["Chris Cheng <chris.cheng.c4@gmail.com>"]
+authors = ["Faberline contributors"]
 license = "MIT"
 repository = "https://github.com/faberline/relay"
 

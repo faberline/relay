@@ -262,4 +262,132 @@ fn relay_engines_converge_across_failover() {
     assert_eq!(sets[0], sets[1], "survivors' engines converge");
     assert_eq!(sets[0].len(), 7, "all 7 committed publishes applied");
 }
+
+#[test]
+fn in_process_raft_convergence() {
+    fn cmd(i: usize) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({ "id": format!("m{i}"), "v": i })).unwrap()
+    }
+
+    let mut c = Cluster::new(3);
+    let old_leader = c.run_until_leader();
+    let leaders: Vec<_> = c.nodes.values().filter(|n| n.is_leader()).collect();
+    assert_eq!(
+        leaders.len(),
+        1,
+        "node {old_leader} at index 0 is the sole leader"
+    );
+
+    // 4 publishes commit and every node's applied holds them in proposal order
+    for i in 0..4 {
+        c.propose(cmd(i));
+    }
+    for id in 0..3 {
+        assert_eq!(
+            c.applied[&id].len(),
+            4,
+            "node {id} at index 3 applied 4 entries before drop"
+        );
+        for idx in 0..4 {
+            assert_eq!(
+                c.applied[&id][idx],
+                cmd(idx),
+                "node {id} at index {idx} holds message m{idx} in proposal order"
+            );
+        }
+    }
+
+    // The leader is dropped
+    c.dropped.insert(old_leader);
+
+    // A new leader different from the old one is elected
+    let new_leader = c.run_until_leader();
+    assert_ne!(
+        new_leader, old_leader,
+        "node {new_leader} replacing node {old_leader} at index 0"
+    );
+
+    // 3 more publishes commit
+    for i in 4..7 {
+        c.propose(cmd(i));
+    }
+
+    // No command committed before the drop is missing from, or reordered in, any survivor's applied
+    for id in (0..3).filter(|id| *id != old_leader) {
+        assert_eq!(
+            c.applied[&id].len(),
+            7,
+            "node {id} at index 6 has all 7 applied entries"
+        );
+        for idx in 0..4 {
+            assert_eq!(
+                c.applied[&id][idx],
+                cmd(idx),
+                "node {id} at index {idx} preserved pre-drop committed message m{idx}"
+            );
+        }
+        for idx in 4..7 {
+            assert_eq!(
+                c.applied[&id][idx],
+                cmd(idx),
+                "node {id} at index {idx} committed post-drop message m{idx}"
+            );
+        }
+    }
+
+    // Each survivor's applied is replayed into a fresh Relay::new(RelayCoreConfig::in_memory()),
+    // as relay_engines_converge_across_failover does. Both survivors return the same ids in the
+    // same order from entry("s", 0, seq), with log_len("s") == 7.
+    let mut survivor_logs = Vec::new();
+    for id in (0..3).filter(|id| *id != old_leader) {
+        let engine = Relay::new(RelayCoreConfig::in_memory());
+        for (idx, raw) in c.applied[&id].iter().enumerate() {
+            let v: serde_json::Value = serde_json::from_slice(raw).unwrap();
+            let mid = v["id"].as_str().unwrap();
+            engine
+                .publish("s", mid, v.clone(), BTreeMap::new(), Utc::now())
+                .unwrap();
+            assert_eq!(
+                mid,
+                &format!("m{idx}"),
+                "node {id} at index {idx} replayed message {mid}"
+            );
+        }
+        let n = engine.log_len("s").unwrap();
+        assert_eq!(n, 7, "node {id} at index 6 has log_len 7");
+        let ids: Vec<String> = (0..n)
+            .map(|seq| {
+                let entry = engine.entry("s", 0, seq).unwrap().unwrap();
+                assert_eq!(
+                    entry.message_id,
+                    format!("m{seq}"),
+                    "node {id} at index {seq} has message id m{seq}"
+                );
+                entry.message_id
+            })
+            .collect();
+        survivor_logs.push((id, ids));
+    }
+
+    let (survivor_a, ids_a) = &survivor_logs[0];
+    let (survivor_b, ids_b) = &survivor_logs[1];
+    assert_eq!(
+        ids_a.len(),
+        7,
+        "node {survivor_a} at index 6 has 7 log entries"
+    );
+    assert_eq!(
+        ids_b.len(),
+        7,
+        "node {survivor_b} at index 6 has 7 log entries"
+    );
+    for idx in 0..7 {
+        assert_eq!(
+            ids_a[idx], ids_b[idx],
+            "node {survivor_a} and node {survivor_b} agree at index {idx} on message m{idx}"
+        );
+    }
+
+    println!("claim observed: in process raft convergence");
+}
 // HANDWRITE-END
