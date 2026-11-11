@@ -8,6 +8,7 @@
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::process::Command;
+use std::time::Duration;
 
 use serde_json::json;
 
@@ -137,6 +138,159 @@ async fn openapi_lists_worker_facing_verbs() {
             doc.contains(path),
             "OpenAPI must advertise {path} to workers"
         );
+    }
+}
+
+const HTTP_METHODS: [&str; 8] = [
+    "get", "put", "post", "delete", "options", "head", "patch", "trace",
+];
+
+async fn served_openapi_json(addr: SocketAddr) -> serde_json::Value {
+    let resp = h2c()
+        .get(format!("http://{addr}/openapi.json"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "served openapi contract: GET /openapi.json must answer 200"
+    );
+    serde_json::from_str(&resp.text().await.unwrap())
+        .expect("served openapi contract: /openapi.json must parse as JSON")
+}
+
+// Served OpenAPI contract: GET /openapi.json is a valid OpenAPI 3 document whose
+// paths carry exactly the worker and data-plane operations, each with the right
+// HTTP method and a non-empty `responses` object.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn served_openapi_contract_is_valid_and_method_accurate() {
+    let addr = start_server().await;
+    let doc = served_openapi_json(addr).await;
+
+    let version = doc["openapi"].as_str().unwrap_or_default();
+    assert!(
+        version.starts_with("3."),
+        "served openapi contract: openapi must be 3.x, got {version:?}"
+    );
+    assert_eq!(
+        doc["info"]["title"], "relay HTTP/2 transport",
+        "served openapi contract: info.title must name the transport"
+    );
+
+    let expected: BTreeSet<(&str, &str)> = BTreeSet::from([
+        ("/v1/{subject}/publish", "post"),
+        ("/v1/{subject}/publish-batch", "post"),
+        ("/v1/{subject}/consume", "post"),
+        ("/v1/{subject}/lease", "post"),
+        ("/v1/{subject}/ack", "post"),
+        ("/v1/{subject}/lease-batch", "post"),
+        ("/v1/{subject}/ack-batch", "post"),
+        ("/v1/{subject}/heartbeat", "post"),
+        ("/v1/{subject}/len", "get"),
+        ("/admin/backup", "get"),
+    ]);
+
+    let paths = doc["paths"]
+        .as_object()
+        .expect("served openapi contract: paths object");
+    let mut actual: BTreeSet<(&str, &str)> = BTreeSet::new();
+    for (path, item) in paths {
+        let item = item
+            .as_object()
+            .expect("served openapi contract: path item object");
+        for (method, op) in item {
+            if !HTTP_METHODS.contains(&method.as_str()) {
+                continue;
+            }
+            let responses = op["responses"].as_object();
+            assert!(
+                responses.is_some_and(|r| !r.is_empty()),
+                "served openapi contract: {method} {path} needs a non-empty responses object"
+            );
+            actual.insert((path.as_str(), method.as_str()));
+        }
+    }
+
+    for (path, method) in &expected {
+        assert!(
+            actual.contains(&(*path, *method)),
+            "served openapi contract: {method} {path} is missing from /openapi.json"
+        );
+    }
+    assert_eq!(
+        actual, expected,
+        "served openapi contract: /openapi.json must list exactly the router's operations"
+    );
+}
+
+// Served OpenAPI contract: the served document is byte-for-byte the offline
+// `relay spec` document, compared as parsed JSON so key order does not matter.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn served_openapi_matches_offline_spec() {
+    let addr = start_server().await;
+    let served = served_openapi_json(addr).await;
+    let offline: serde_json::Value = serde_json::from_str(&relay::queue::openapi::api_doc_json())
+        .expect("served openapi contract: offline spec must parse as JSON");
+    assert_eq!(
+        served, offline,
+        "served openapi contract: /openapi.json must equal the offline relay spec document"
+    );
+}
+
+// Served OpenAPI contract: the document lists no route the router lacks, and
+// every route in the router source is documented. Each documented operation
+// must be served: a 404 or 405 for its method fails the contract.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn served_openapi_covers_every_data_plane_route() {
+    let addr = start_server().await;
+    let doc = served_openapi_json(addr).await;
+    let paths = doc["paths"]
+        .as_object()
+        .expect("served openapi contract: paths object");
+
+    let router_source = include_str!("../../../relay-queue/src/server.rs");
+    let route_literals: BTreeSet<&str> = router_source
+        .split(".route(\"")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next())
+        .collect();
+    assert!(
+        !route_literals.is_empty(),
+        "served openapi contract: found no .route(\"...\") literals in the router source"
+    );
+    for route in &route_literals {
+        assert!(
+            paths.contains_key(*route),
+            "served openapi contract: router route {route} is not documented in /openapi.json"
+        );
+    }
+
+    let client = h2c();
+    for (path, item) in paths {
+        let item = item
+            .as_object()
+            .expect("served openapi contract: path item object");
+        let concrete = path.replace("{subject}", "s");
+        for method in item.keys().filter(|m| HTTP_METHODS.contains(&m.as_str())) {
+            let url = format!("http://{addr}{concrete}");
+            let req = match method.as_str() {
+                "get" => client.get(&url),
+                "post" => client.post(&url).body(""),
+                other => panic!("served openapi contract: unexpected method {other} on {path}"),
+            };
+            let status = req
+                .timeout(Duration::from_secs(5))
+                .send()
+                .await
+                .unwrap_or_else(|e| panic!("served openapi contract: {method} {path} failed: {e}"))
+                .status()
+                .as_u16();
+            assert!(
+                status != 404 && status != 405,
+                "served openapi contract: {method} {path} answered {status}; the router must serve every documented operation"
+            );
+        }
     }
 }
 
