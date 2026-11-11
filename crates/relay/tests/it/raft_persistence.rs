@@ -9,12 +9,15 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use raft_runtime::{Membership, RaftStateMachine};
 use relay::{
     PubCommand, Relay, RelayCommand, RelayCoreConfig, RelayOutcome, RelayRaft, RelayStateMachine,
 };
+
+use super::raft_cluster::CLUSTER_TEST_LOCK;
 
 fn sole_voter() -> Membership {
     Membership {
@@ -389,6 +392,338 @@ fn state_machine_completed_proposals_restored_prevent_double_apply() {
         }
         _ => panic!("outcomes mismatch: {outcome1:?} vs {outcome2:?}"),
     }
+}
+
+/// Issue 11 (durable-raft-hard-state-restore): a three-voter group restarted
+/// on its own data dirs. Same shape as `Cluster` in raft_cluster.rs: one
+/// pre-bound listener per node, a per-node tempdir for `relay/` and `raft/`.
+const DEADLINE: Duration = Duration::from_secs(8);
+
+struct Node {
+    raft: Arc<RelayRaft>,
+    serve: tokio::task::JoinHandle<()>,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+struct Group {
+    urls: HashMap<u64, String>,
+    listeners: Vec<Option<tokio::net::TcpListener>>,
+    membership: Membership,
+    nodes: Vec<Option<Node>>,
+    dirs: Vec<tempfile::TempDir>,
+}
+
+impl Group {
+    async fn prepare(n: u64) -> Group {
+        let mut listeners = Vec::new();
+        let mut urls = HashMap::new();
+        for id in 0..n {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            urls.insert(id, format!("http://{}", l.local_addr().unwrap()));
+            listeners.push(Some(l));
+        }
+        Group {
+            urls,
+            listeners,
+            membership: Membership {
+                voters: (0..n).collect(),
+                learners: vec![],
+            },
+            nodes: (0..n).map(|_| None).collect(),
+            dirs: (0..n).map(|_| tempfile::tempdir().unwrap()).collect(),
+        }
+    }
+
+    /// Spawn node `id` on its existing dirs and serve its peer router.
+    fn start_node(&mut self, id: usize) {
+        let engine = Arc::new(Relay::new(RelayCoreConfig {
+            data_dir: self.dirs[id]
+                .path()
+                .join("relay")
+                .to_string_lossy()
+                .into_owned(),
+            ..RelayCoreConfig::default()
+        }));
+        let peers: HashMap<u64, String> = self
+            .urls
+            .iter()
+            .filter(|(k, _)| **k != id as u64)
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+        let raft = Arc::new(
+            RelayRaft::spawn(
+                engine,
+                &self.dirs[id].path().join("raft"),
+                id as u64,
+                self.membership.clone(),
+                peers,
+                RelayRaft::host_config(1024),
+            )
+            .unwrap(),
+        );
+        let app = raft.router();
+        let listener = match self.listeners[id].take() {
+            Some(listener) => listener,
+            None => {
+                let address = self.urls[&(id as u64)]
+                    .strip_prefix("http://")
+                    .unwrap()
+                    .parse::<std::net::SocketAddr>()
+                    .unwrap();
+                let listener = std::net::TcpListener::bind(address).unwrap();
+                listener.set_nonblocking(true).unwrap();
+                tokio::net::TcpListener::from_std(listener).unwrap()
+            }
+        };
+        let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
+        let serve = tokio::spawn(async move {
+            let _ = axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await;
+        });
+        self.nodes[id] = Some(Node {
+            raft,
+            serve,
+            shutdown: Some(shutdown),
+        });
+    }
+
+    fn start_all(&mut self) {
+        for id in 0..self.nodes.len() {
+            self.start_node(id);
+        }
+    }
+
+    fn raft(&self, id: usize) -> &Arc<RelayRaft> {
+        &self.nodes[id].as_ref().expect("node running").raft
+    }
+
+    /// Stop the node: abort its serve loop and shut its host down. Its dirs stay.
+    async fn kill(&mut self, id: usize) {
+        if let Some(mut n) = self.nodes[id].take() {
+            n.shutdown.take();
+            n.serve.abort();
+            let _ = n.serve.await;
+            n.raft.shutdown().await.unwrap();
+        }
+    }
+
+    async fn shutdown(mut self) {
+        for node in self.nodes.iter_mut() {
+            if let Some(mut node) = node.take() {
+                node.raft.shutdown().await.unwrap();
+                if let Some(shutdown) = node.shutdown.take() {
+                    let _ = shutdown.send(());
+                }
+                let _ = node.serve.await;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    fn live(&self) -> impl Iterator<Item = (usize, &Node)> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| n.as_ref().map(|n| (i, n)))
+    }
+
+    /// Wait until exactly one live node reports `is_leader()`; return its index.
+    async fn wait_single_leader(&self) -> usize {
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            let mut leaders = Vec::new();
+            for (i, n) in self.live() {
+                if n.raft.is_leader().await {
+                    leaders.push(i);
+                }
+            }
+            if leaders.len() == 1 {
+                return leaders[0];
+            }
+            assert!(
+                Instant::now() < deadline,
+                "expected exactly one leader within 8 s, got {leaders:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Wait until every LIVE node holds at least `want` entries and all live
+    /// nodes report the same applied index.
+    async fn wait_converged(&self, want: u64) {
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            let applied: Vec<u64> = self.live().map(|(_, n)| n.raft.applied_index()).collect();
+            let logs_ok = self
+                .live()
+                .all(|(_, n)| n.raft.relay().log_len("s").unwrap() >= want);
+            if logs_ok && applied.windows(2).all(|w| w[0] == w[1]) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "live nodes did not converge to {want} entries with one applied index: {applied:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    fn message_ids(&self, id: usize) -> Vec<String> {
+        let r = self.raft(id).relay();
+        let len = r.log_len("s").unwrap();
+        (0..len)
+            .filter_map(|seq| r.entry("s", 0, seq).unwrap().map(|e| e.message_id))
+            .collect()
+    }
+}
+
+fn ids(list: &[&str]) -> Vec<String> {
+    list.iter().map(|s| s.to_string()).collect()
+}
+
+/// Test 1, follower restart: the follower comes back on its own dirs,
+/// converges in order, applies nothing twice, and dedupes an old message_id.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn three_voter_follower_restart_rejoins_without_double_apply() {
+    let _guard = CLUSTER_TEST_LOCK.lock().await;
+    let mut g = Group::prepare(3).await;
+    g.start_all();
+    let leader = g.wait_single_leader().await;
+    for m in ["m0", "m1", "m2"] {
+        let (_, out) = g.raft(leader).publish(&cmd(m)).await.unwrap();
+        assert!(!out.expect("leader claims outcome").deduped, "publish {m}");
+    }
+    g.wait_converged(3).await;
+
+    let follower = (0..3).find(|i| *i != leader).unwrap();
+    g.kill(follower).await;
+    let leader = g.wait_single_leader().await;
+    for m in ["m3", "m4"] {
+        let (_, out) = g.raft(leader).publish(&cmd(m)).await.unwrap();
+        assert!(!out.expect("leader claims outcome").deduped, "publish {m}");
+    }
+    g.wait_converged(5).await;
+
+    g.start_node(follower);
+    g.wait_converged(5).await;
+    let want = ids(&["m0", "m1", "m2", "m3", "m4"]);
+    for i in 0..3 {
+        assert_eq!(g.message_ids(i), want, "node {i} holds m0..m4 in order");
+        assert_eq!(
+            g.raft(i).relay().log_len("s").unwrap(),
+            5,
+            "node {i} holds exactly 5 entries (no double-apply)"
+        );
+        assert_eq!(
+            g.raft(i).applied_index(),
+            g.raft(leader).applied_index(),
+            "node {i} applied_index equals the leader's"
+        );
+    }
+
+    let (_, dup) = g.raft(follower).publish(&cmd("m1")).await.unwrap();
+    assert!(
+        dup.expect("outcome").deduped,
+        "republish of m1 after restart dedupes"
+    );
+    assert_eq!(
+        g.raft(leader).relay().log_len("s").unwrap(),
+        5,
+        "deduped republish adds no entry: still 5"
+    );
+    g.shutdown().await;
+}
+
+/// Test 2, leader restart: the old leader rejoins as a follower, converges,
+/// and a publish sent to it is applied on all three.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn three_voter_leader_restart_rejoins_as_follower() {
+    let _guard = CLUSTER_TEST_LOCK.lock().await;
+    let mut g = Group::prepare(3).await;
+    g.start_all();
+    let old = g.wait_single_leader().await;
+    let (_, out) = g.raft(old).publish(&cmd("a")).await.unwrap();
+    assert!(!out.expect("leader claims outcome").deduped, "publish a");
+    g.wait_converged(1).await;
+
+    g.kill(old).await;
+    let new = g.wait_single_leader().await;
+    assert_ne!(new, old, "a new leader replaces the killed one");
+    let (_, out) = g.raft(new).publish(&cmd("b")).await.unwrap();
+    assert!(!out.expect("leader claims outcome").deduped, "publish b");
+    g.wait_converged(2).await;
+
+    g.start_node(old);
+    let only = g.wait_single_leader().await;
+    assert_ne!(only, old, "restarted node rejoins as a follower");
+    g.wait_converged(2).await;
+    for i in 0..3 {
+        assert_eq!(
+            g.message_ids(i),
+            ids(&["a", "b"]),
+            "node {i} holds a,b after leader restart"
+        );
+    }
+
+    let (_, out) = g.raft(old).publish(&cmd("c")).await.unwrap();
+    assert!(
+        !out.expect("restarted node claims outcome").deduped,
+        "publish c via restarted node"
+    );
+    g.wait_converged(3).await;
+    for i in 0..3 {
+        assert_eq!(
+            g.message_ids(i),
+            ids(&["a", "b", "c"]),
+            "node {i} holds a,b,c after publish via restarted node"
+        );
+    }
+    g.shutdown().await;
+}
+
+/// Test 3, full-group restart: all three stop and start on their own dirs;
+/// a leader is elected within 8 s, history is intact, and a new publish is
+/// entry 4 on all three.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn three_voter_full_group_restart_keeps_history_and_elects() {
+    let _guard = CLUSTER_TEST_LOCK.lock().await;
+    let mut g = Group::prepare(3).await;
+    g.start_all();
+    let leader = g.wait_single_leader().await;
+    for m in ["a", "b", "c"] {
+        let (_, out) = g.raft(leader).publish(&cmd(m)).await.unwrap();
+        assert!(!out.expect("leader claims outcome").deduped, "publish {m}");
+    }
+    g.wait_converged(3).await;
+
+    for i in 0..3 {
+        g.kill(i).await;
+    }
+    g.start_all();
+    let leader = g.wait_single_leader().await;
+    g.wait_converged(3).await;
+    for i in 0..3 {
+        assert_eq!(
+            g.message_ids(i),
+            ids(&["a", "b", "c"]),
+            "node {i} holds a,b,c after full restart"
+        );
+    }
+
+    let (_, out) = g.raft(leader).publish(&cmd("d")).await.unwrap();
+    assert!(!out.expect("leader claims outcome").deduped, "publish d");
+    g.wait_converged(4).await;
+    for i in 0..3 {
+        assert_eq!(
+            g.message_ids(i),
+            ids(&["a", "b", "c", "d"]),
+            "node {i} holds a,b,c,d (d is entry 4)"
+        );
+    }
+    g.shutdown().await;
 }
 
 // HANDWRITE-END

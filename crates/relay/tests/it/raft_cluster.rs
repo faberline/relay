@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use raft_runtime::Membership;
 use relay::{PubCommand, Relay, RelayCoreConfig, RelayRaft};
 
-static CLUSTER_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(super) static CLUSTER_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn cmd(id: &str) -> PubCommand {
     PubCommand {
