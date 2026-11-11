@@ -293,4 +293,113 @@ fn file_render_ends_with_explicit_terminal_marker() {
     assert!(out.is_file());
     assert!(output.lines().any(|line| line == "next: done"));
 }
+
+/// R1 / AC3: raw deploy-CLI artifact streams stay unwrapped: stdout holds the
+/// artifact bytes only, no line starts with `next:`, and stderr is empty.
+/// Rendering a second time with `--out <file>` writes the identical bytes to
+/// the file and prints the `next: done` marker on stdout (WI #6).
+#[test]
+fn raw_deploy_artifact_streams_stay_unwrapped() {
+    let cases: &[(&[&str], &str)] = &[
+        (&["k8s", "crd", "render"], "crd.yaml"),
+        (
+            &["k8s", "operator", "render", "--namespace", "relay-ops"],
+            "operator.yaml",
+        ),
+        (
+            &["k8s", "instance", "render", "--profile", "dev"],
+            "relay.yaml",
+        ),
+        (
+            &["dockerfile", "render", "--variant", "source"],
+            "Dockerfile",
+        ),
+        (
+            &["dockerfile", "render", "--variant", "release"],
+            "Dockerfile.release",
+        ),
+    ];
+
+    for (verb_args, default_file) in cases {
+        // 1. Raw run: stdout holds the artifact bytes only, no `next:` marker line, stderr empty.
+        let raw = run(verb_args);
+        assert!(
+            raw.status.success(),
+            "`relay {}` failed with status {:?}: {}",
+            verb_args.join(" "),
+            raw.status.code(),
+            String::from_utf8_lossy(&raw.stderr)
+        );
+        assert!(
+            raw.stderr.is_empty(),
+            "`relay {}` expected empty stderr, got: {}",
+            verb_args.join(" "),
+            String::from_utf8_lossy(&raw.stderr)
+        );
+        let raw_stdout = String::from_utf8(raw.stdout).expect("utf8 stdout");
+        assert!(
+            !raw_stdout.is_empty(),
+            "`relay {}` emitted empty stdout",
+            verb_args.join(" ")
+        );
+        for line in raw_stdout.lines() {
+            assert!(
+                !line.starts_with("next:"),
+                "`relay {}` stdout contained terminal marker line `{line}`",
+                verb_args.join(" ")
+            );
+        }
+
+        // 2. Second render with `--out <tempdir file>`.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out_file = dir.path().join(default_file);
+        let out_file_str = out_file.to_str().expect("valid utf8 path");
+
+        let mut out_args = verb_args.to_vec();
+        out_args.extend_from_slice(&["--out", out_file_str]);
+
+        let file_run = run(&out_args);
+        assert!(
+            file_run.status.success(),
+            "`relay {}` failed with status {:?}: {}",
+            out_args.join(" "),
+            file_run.status.code(),
+            String::from_utf8_lossy(&file_run.stderr)
+        );
+        assert!(
+            file_run.stderr.is_empty(),
+            "`relay {}` expected empty stderr, got: {}",
+            out_args.join(" "),
+            String::from_utf8_lossy(&file_run.stderr)
+        );
+        let file_stdout = String::from_utf8(file_run.stdout).expect("utf8 stdout");
+        assert!(
+            file_stdout.lines().any(|line| line == "next: done"),
+            "`relay {}` stdout missing `next: done`: {file_stdout}",
+            out_args.join(" ")
+        );
+
+        // Compare file bytes against raw run stdout bytes.
+        let target_file = if out_file.is_file() {
+            out_file.clone()
+        } else if out_file.is_dir() && out_file.join(default_file).is_file() {
+            out_file.join(default_file)
+        } else {
+            dir.path().join(default_file)
+        };
+        let file_bytes = std::fs::read(&target_file).unwrap_or_else(|e| {
+            panic!(
+                "`relay {}` failed to read expected output file {}: {e}",
+                out_args.join(" "),
+                target_file.display()
+            )
+        });
+        assert_eq!(
+            file_bytes,
+            raw_stdout.as_bytes(),
+            "`relay {}` written file bytes differ from raw stdout bytes",
+            out_args.join(" ")
+        );
+    }
+}
 // HANDWRITE-END
