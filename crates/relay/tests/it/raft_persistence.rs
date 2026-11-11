@@ -584,6 +584,32 @@ fn ids(list: &[&str]) -> Vec<String> {
     list.iter().map(|s| s.to_string()).collect()
 }
 
+/// Publish `id` through the current single leader until it commits. A failed
+/// attempt (apply timeout, not leader, forward failure) is retried with the
+/// SAME message_id after a short pause; publish-by-id is idempotent, so a
+/// retry can only dedupe, never add a second entry. Returns `(retried,
+/// deduped)`. A first attempt that succeeds must report `deduped == false`.
+async fn publish_until_committed(g: &Group, id: &str) -> (bool, bool) {
+    let deadline = Instant::now() + DEADLINE;
+    let mut retried = false;
+    loop {
+        let leader = g.wait_single_leader().await;
+        match g.raft(leader).publish(&cmd(id)).await {
+            Ok((_, out)) => {
+                return (retried, out.expect("leader claims outcome").deduped);
+            }
+            Err(err) => {
+                retried = true;
+                assert!(
+                    Instant::now() < deadline,
+                    "publish {id} not committed within 8 s; last error on node {leader}: {err:#}"
+                );
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+}
+
 /// Test 1, follower restart: the follower comes back on its own dirs,
 /// converges in order, applies nothing twice, and dedupes an old message_id.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -602,8 +628,8 @@ async fn three_voter_follower_restart_rejoins_without_double_apply() {
     g.kill(follower).await;
     let leader = g.wait_single_leader().await;
     for m in ["m3", "m4"] {
-        let (_, out) = g.raft(leader).publish(&cmd(m)).await.unwrap();
-        assert!(!out.expect("leader claims outcome").deduped, "publish {m}");
+        let (retried, deduped) = publish_until_committed(&g, m).await;
+        assert!(!deduped || retried, "publish {m}");
     }
     g.wait_converged(5).await;
 
@@ -652,8 +678,8 @@ async fn three_voter_leader_restart_rejoins_as_follower() {
     g.kill(old).await;
     let new = g.wait_single_leader().await;
     assert_ne!(new, old, "a new leader replaces the killed one");
-    let (_, out) = g.raft(new).publish(&cmd("b")).await.unwrap();
-    assert!(!out.expect("leader claims outcome").deduped, "publish b");
+    let (retried, deduped) = publish_until_committed(&g, "b").await;
+    assert!(!deduped || retried, "publish b");
     g.wait_converged(2).await;
 
     g.start_node(old);
@@ -703,7 +729,7 @@ async fn three_voter_full_group_restart_keeps_history_and_elects() {
         g.kill(i).await;
     }
     g.start_all();
-    let leader = g.wait_single_leader().await;
+    g.wait_single_leader().await;
     g.wait_converged(3).await;
     for i in 0..3 {
         assert_eq!(
@@ -713,8 +739,8 @@ async fn three_voter_full_group_restart_keeps_history_and_elects() {
         );
     }
 
-    let (_, out) = g.raft(leader).publish(&cmd("d")).await.unwrap();
-    assert!(!out.expect("leader claims outcome").deduped, "publish d");
+    let (retried, deduped) = publish_until_committed(&g, "d").await;
+    assert!(!deduped || retried, "publish d");
     g.wait_converged(4).await;
     for i in 0..3 {
         assert_eq!(
