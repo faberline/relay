@@ -4331,6 +4331,7 @@ dependencies = [
  "service-backup",
  "service-http",
  "service-k8s",
+ "storage-durable",
  "tempfile",
  "tokio",
  "tower 0.5.3",
@@ -4434,6 +4435,7 @@ dependencies = [
  "chrono",
  "relay-shared-kernel",
  "serde_json",
+ "storage-durable",
 ]
 
 [[package]]
