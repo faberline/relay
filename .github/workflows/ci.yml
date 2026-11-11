@@ -1,17 +1,17 @@
-# relay on Faberline's shared GKE test cluster (faberline-test).
+# CI stages: lint -> test -> e2e -> gate.
+# See https://github.com/faberline/aw/blob/main/docs/standards/ci.md
+# The ruleset requires only the "gate" job. Keep its name fixed.
 #
-# faberline/aw's reusable gke-test workflow deploys k8s/overlays/gke-test
-# (three raft voters) with the image under test on pool-relay-server, runs one
-# suite's test Job on pool-relay-client, uploads the evidence artifact
-# gke-test-evidence-<run_id>-<attempt>-<suite>, and tears the namespace down.
-# The test Job runs the Rust suite crates/relay/tests/it/e2e/<suite>.rs from the
-# relay-test-client image; every check, image identity included, is in Rust
-# (aw docs/standards/rust-tests.md).
+# relay on Faberline's shared GKE test cluster (faberline-test) runs in the
+# e2e-* jobs. faberline/aw's reusable gke-test workflow deploys
+# k8s/overlays/gke-test (three raft voters) with the image under test on
+# pool-relay-server, runs one suite's test Job on pool-relay-client, uploads the
+# evidence artifact gke-test-evidence-<run_id>-<attempt>-<suite>, and tears the
+# namespace down. The test Job runs the Rust suite
+# crates/relay/tests/it/e2e/<suite>.rs from the relay-test-client image.
 #
-# Suites (aw docs/standards/test-cluster.md "Test suites"), one call each, one
-# at a time, each on a fresh deploy:
-#   raft_failover  k8s/gke-test-job/raft_failover  replaces scripts/kind-failover-smoke.sh
-# A pull request runs all of them; a dispatch can pick one.
+# Suites (aw docs/standards/test-cluster.md "Test suites"):
+#   raft_failover  k8s/gke-test-job/raft_failover
 #
 # GKE runs linux/amd64 only. aw owns the cluster, both pools, and the
 # gke-test-relay service account (infra/gke-test/pools.yaml in faberline/aw);
@@ -21,42 +21,105 @@
 #   ghcr.io/faberline/relay:sha-<git12>              relay-test-image.yml (server)
 #   ghcr.io/faberline/relay-test-client:sha-<git12>  the test-client job below
 # Both are pinned by digest before the run.
-name: gke-test
+name: ci
 
 on:
   pull_request:
-    paths:
-      - ".github/workflows/gke-test.yml"
-      - ".github/workflows/relay-test-image.yml"
-      - "Dockerfile"
-      - "Dockerfile.test"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "k8s/base/**"
-      - "k8s/overlays/gke-test/**"
-      - "k8s/gke-test-job/**"
-      - "crates/**"
+  push:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      suite:
-        description: Suite to run; all runs every suite, one at a time.
-        type: choice
-        options: [all, raft_failover]
-        default: all
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  image:
-    name: build server image
+  lint:
+    name: "lint: fmt, clippy"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: relay-ci
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test-workspace:
+    name: "test: workspace"
+    needs: [lint]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: relay-ci
+      - name: Test
+        run: cargo test --locked --workspace
+
+  test-features:
+    name: "test: all features"
+    needs: [lint]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: relay-ci
+      - name: Clippy, all features
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Test, all features
+        # The release gate builds default features; --all-features adds the
+        # operator and backup tests it does not reach.
+        run: cargo test --locked --workspace --all-features
+
+  test-release-contract:
+    name: "test: release contract"
+    needs: [lint]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: 0.12.1
+          enable-cache: false
+      - name: Release contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --python 3.13 --no-project scripts/release/verify-release-contract.py --app relay
+          uv run --python 3.13 --no-project scripts/release/verify-release-contract.py --self-test
+          uv run --python 3.13 --no-project scripts/release/make-gke-release-receipt.py --self-test
+
+  e2e-image:
+    name: "e2e: build server image"
+    needs: [test-workspace, test-features, test-release-contract]
     permissions:
       contents: read
       packages: write
     uses: ./.github/workflows/relay-test-image.yml
 
-  test-client:
-    name: build test-client image
+  e2e-test-client:
+    name: "e2e: build test-client image"
+    needs: [test-workspace, test-features, test-release-contract]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -133,9 +196,9 @@ jobs:
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad digest: $DIGEST"; exit 1; }
           echo "image=ghcr.io/${{ github.repository_owner }}/relay-test-client@${DIGEST}" >> "$GITHUB_OUTPUT"
 
-  resolve:
-    name: resolve image identity
-    needs: image
+  e2e-resolve:
+    name: "e2e: resolve image identity"
+    needs: [e2e-image]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -143,7 +206,6 @@ jobs:
     outputs:
       image: ${{ steps.identity.outputs.image }}
       test-env: ${{ steps.identity.outputs.test_env }}
-      suites: ${{ steps.identity.outputs.suites }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -157,9 +219,7 @@ jobs:
         id: identity
         shell: bash
         env:
-          RAW_IMAGE: ${{ needs.image.outputs.image }}
-          # A pull request has no inputs, so it runs all suites.
-          INPUT_SUITE: ${{ inputs.suite || 'all' }}
+          RAW_IMAGE: ${{ needs.e2e-image.outputs.image }}
         run: |
           set -euo pipefail
           die() { echo "::error::$*" >&2; exit 1; }
@@ -185,15 +245,8 @@ jobs:
           fi
           [[ "$runtime_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || die "no single linux/amd64 digest for $image"
 
-          case "$INPUT_SUITE" in
-            all) suites='["raft_failover"]' ;;
-            raft_failover) suites="[\"${INPUT_SUITE}\"]" ;;
-            *) die "suite must be all or raft_failover, got: $INPUT_SUITE" ;;
-          esac
-
           {
             echo "image=${image}"
-            echo "suites=${suites}"
             echo "test_env<<EOF"
             echo "E2E_EXPECTED_VERSION=${version}"
             echo "E2E_EXPECTED_GIT_SHA=${git_sha}"
@@ -202,38 +255,46 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
           {
-            echo "### relay gke-test identity"
+            echo "### relay ci e2e identity"
             echo
             echo '```text'
             echo "image:          ${image}"
             echo "version:        ${version}"
             echo "git_sha:        ${git_sha}"
             echo "runtime_digest: ${runtime_digest}"
-            echo "suites:         ${suites}"
+            echo "suite:          raft_failover"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  gke-test:
-    name: GKE e2e (${{ matrix.suite }})
-    needs: [resolve, test-client]
-    # One call at a time: the repository's concurrency group in aw keeps only
-    # one waiting run. fail-fast off runs the other suites when one fails.
-    strategy:
-      max-parallel: 1
-      fail-fast: false
-      matrix:
-        suite: ${{ fromJSON(needs.resolve.outputs.suites) }}
+  e2e-raft-failover:
+    name: "e2e: raft_failover"
+    needs: [e2e-resolve, e2e-test-client]
     permissions:
       id-token: write
       contents: read
       packages: read
-    uses: faberline/aw/.github/workflows/gke-test.yml@main
+    uses: faberline/aw/.github/workflows/gke-test.yml@6eb7ebcdf38343e0d4c77f8674b6bc30976d86bb
     with:
-      image: ${{ needs.resolve.outputs.image }}
+      aw-ref: 6eb7ebcdf38343e0d4c77f8674b6bc30976d86bb
+      image: ${{ needs.e2e-resolve.outputs.image }}
       image-name: ghcr.io/faberline/relay
       namespace: relay
-      test-job: k8s/gke-test-job/${{ matrix.suite }}
-      test-image: ${{ needs.test-client.outputs.image }}
+      test-job: k8s/gke-test-job/raft_failover
+      test-image: ${{ needs.e2e-test-client.outputs.image }}
       test-image-name: relay-test-client
-      test-env: ${{ needs.resolve.outputs.test-env }}
-      evidence-suffix: ${{ matrix.suite }}
+      test-env: ${{ needs.e2e-resolve.outputs.test-env }}
+      evidence-suffix: raft_failover
+
+  gate:
+    name: gate
+    if: always()
+    needs: [lint, test-workspace, test-features, test-release-contract, e2e-image, e2e-test-client, e2e-resolve, e2e-raft-failover]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check every stage
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e '.lint.result == "success"' > /dev/null
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")' > /dev/null
