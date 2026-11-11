@@ -1,6 +1,8 @@
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:relay-cli-contract" tracker="pending-tracker" reason="Prove the standard Relay CLI and shared structured-log configuration remain discoverable."
 use std::process::Command;
 
+use cli_std::chainable::assert_chainable;
+
 fn relay(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_relay"))
         .args(args)
@@ -60,6 +62,78 @@ fn offline_spec_and_three_client_languages_share_one_contract() {
         );
         assert!(out.path().join(entrypoint).is_file());
         assert!(String::from_utf8_lossy(&generated.stdout).contains("next: done"));
+    }
+}
+
+fn last_non_empty_line(stdout: &str) -> Option<&str> {
+    stdout.lines().rev().find(|line| !line.trim().is_empty())
+}
+
+/// Write outputs: `spec gen --out <dir>` and a render verb with `--out <file>`
+/// end stdout with the chainable terminal marker as the last non-empty line,
+/// and the whole stdout passes `assert_chainable`.
+#[test]
+fn write_outputs_end_stdout_with_chainable_marker() {
+    let spec_dir = tempfile::tempdir().unwrap();
+    let spec = relay(&[
+        "spec",
+        "gen",
+        "--lang",
+        "rust",
+        "--out",
+        spec_dir.path().to_str().unwrap(),
+    ]);
+    assert!(
+        spec.status.success(),
+        "relay spec gen failed: {}",
+        String::from_utf8_lossy(&spec.stderr)
+    );
+    let spec_stdout = String::from_utf8(spec.stdout).unwrap();
+    assert_eq!(last_non_empty_line(&spec_stdout), Some("next: done"));
+    assert_chainable(&spec_stdout).unwrap_or_else(|e| panic!("spec gen: {e}"));
+
+    // `--out` without an extension is a directory: the artifact is `<dir>/Dockerfile`.
+    let render_dir = tempfile::tempdir().unwrap();
+    let out_dir = render_dir.path().join("out");
+    let render = relay(&[
+        "dockerfile",
+        "render",
+        "--variant",
+        "source",
+        "--out",
+        out_dir.to_str().unwrap(),
+    ]);
+    assert!(
+        render.status.success(),
+        "relay dockerfile render --out failed: {}",
+        String::from_utf8_lossy(&render.stderr)
+    );
+    assert!(
+        out_dir.join("Dockerfile").is_file(),
+        "render wrote the artifact file"
+    );
+    let render_stdout = String::from_utf8(render.stdout).unwrap();
+    assert_eq!(last_non_empty_line(&render_stdout), Some("next: done"));
+    assert_chainable(&render_stdout).unwrap_or_else(|e| panic!("dockerfile render --out: {e}"));
+}
+
+/// Stdout-only form: the same render verb without `--out` prints the artifact
+/// and no `next:` line, so the artifact stream stays unwrapped.
+#[test]
+fn stdout_only_render_prints_artifact_without_next_line() {
+    let render = relay(&["dockerfile", "render", "--variant", "source"]);
+    assert!(
+        render.status.success(),
+        "relay dockerfile render failed: {}",
+        String::from_utf8_lossy(&render.stderr)
+    );
+    let stdout = String::from_utf8(render.stdout).unwrap();
+    assert!(!stdout.trim().is_empty(), "artifact printed to stdout");
+    for line in stdout.lines() {
+        assert!(
+            !line.starts_with("next:"),
+            "stdout-only render must not print a next line, got `{line}`"
+        );
     }
 }
 // HANDWRITE-END

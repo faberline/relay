@@ -569,4 +569,84 @@ async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
         "artifact 20, seq {final_seq_marker}: final restored un-acked seqs match live engine"
     );
 }
+
+/// Backup output (feature `backup`): `relay backup` against a live node writes
+/// the snapshot to the `file://` sink, prints the `BackupRunResult` JSON, and
+/// ends stdout with the chainable marker `next: done`.
+#[cfg(feature = "backup")]
+#[tokio::test(flavor = "multi_thread")]
+async fn backup_command_stdout_is_json_then_chainable_marker() {
+    use cli_std::chainable::assert_chainable;
+
+    let (addr, state) = start_server().await;
+    state
+        .relay_handle()
+        .publish(
+            "jobs",
+            "m-1",
+            json!({"task": "t"}),
+            BTreeMap::new(),
+            Utc::now(),
+        )
+        .unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("http://{addr}");
+    let dest = format!("file://{}", dir.path().display());
+    // The server runs on this runtime; the blocking child process fetches from it.
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_relay"))
+            .args(["backup", "--url", &url, "--dest", &dest])
+            .output()
+            .expect("run relay backup")
+    })
+    .await
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "relay backup failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        stdout.lines().rev().find(|line| !line.trim().is_empty()),
+        Some("next: done"),
+        "last non-empty stdout line is the marker"
+    );
+    assert_chainable(&stdout).unwrap_or_else(|e| panic!("relay backup: {e}"));
+
+    let before_marker = stdout.trim_end().strip_suffix("next: done").unwrap();
+    let result: serde_json::Value =
+        serde_json::from_str(before_marker).expect("text before the marker is the JSON result");
+    let key = result["object"]["key"]
+        .as_str()
+        .expect("object key in result");
+    assert!(
+        dir.path().join(key).is_file(),
+        "snapshot artifact written to the sink"
+    );
+}
+
+/// Backup without the feature: `relay backup` exits non-zero and says the
+/// binary was compiled without backup support.
+#[cfg(not(feature = "backup"))]
+#[test]
+fn backup_command_without_feature_exits_nonzero_with_rebuild_hint() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = format!("file://{}", dir.path().display());
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_relay"))
+        .args(["backup", "--url", "http://127.0.0.1:1", "--dest", &dest])
+        .output()
+        .expect("run relay backup");
+    assert!(
+        !output.status.success(),
+        "backup must fail without the feature"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("compiled without backup support"),
+        "stderr names the missing feature: {stderr}"
+    );
+}
 // HANDWRITE-END
