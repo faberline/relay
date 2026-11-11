@@ -15,6 +15,9 @@ use raft_runtime::{Membership, RaftStateMachine};
 use relay::{
     PubCommand, Relay, RelayCommand, RelayCoreConfig, RelayOutcome, RelayRaft, RelayStateMachine,
 };
+use std::time::{Duration, Instant};
+
+use crate::cluster::{Cluster, CLUSTER_TEST_LOCK};
 
 fn sole_voter() -> Membership {
     Membership {
@@ -389,6 +392,196 @@ fn state_machine_completed_proposals_restored_prevent_double_apply() {
         }
         _ => panic!("outcomes mismatch: {outcome1:?} vs {outcome2:?}"),
     }
+}
+
+/// Waits until every live node has applied `want` raft entries and holds
+/// `want` engine entries. Panics with the node ids and the step.
+async fn wait_all_applied(c: &Cluster, want: u64, step: &str) {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let lagging: Vec<(usize, u64, u64)> = c
+            .live()
+            .filter_map(|(i, n)| {
+                let applied = n.raft.applied_index();
+                let len = n.raft.relay().log_len("s").unwrap();
+                (applied != want || len != want).then_some((i, applied, len))
+            })
+            .collect();
+        if lagging.is_empty() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{step}: nodes (id, applied_index, log_len) not at {want}: {lagging:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Waits until exactly one live node reports `is_leader()`.
+async fn wait_one_leader(c: &Cluster, step: &str) {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let mut leaders = Vec::new();
+        for (i, n) in c.live() {
+            if n.raft.is_leader().await {
+                leaders.push(i);
+            }
+        }
+        if leaders.len() == 1 {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{step}: want exactly one leader, nodes reporting is_leader(): {leaders:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Waits until every live node knows a leader.
+async fn wait_all_know_leader(c: &Cluster, step: &str) {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let mut unknown = Vec::new();
+        for (i, n) in c.live() {
+            if n.raft.leader().await.is_none() {
+                unknown.push(i);
+            }
+        }
+        if unknown.is_empty() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{step}: nodes with no known leader: {unknown:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Every live node holds the same message ids in the same order, with no
+/// duplicate.
+fn assert_identical_ids(c: &Cluster, step: &str) {
+    let reference = c.message_ids(0);
+    for (i, _) in c.live() {
+        let got = c.message_ids(i);
+        let mut unique = got.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            got.len(),
+            "{step}: node {i} has duplicate message ids: {got:?}"
+        );
+        assert_eq!(
+            got, reference,
+            "{step}: node {i} message ids differ from node 0"
+        );
+    }
+}
+
+/// Restart in a three-voter group: a voter restarted from its own data dir
+/// keeps its committed state (applied floor and engine log, no double-apply)
+/// and rejoins the group. The group loses no committed publish across a
+/// restart of a follower, of the leader, and of all three voters in turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn restarted_voters_rejoin_with_hard_state_intact() {
+    let _guard = CLUSTER_TEST_LOCK.lock().await;
+    let mut c = Cluster::prepare(3).await;
+    c.start_all(1024);
+
+    // Step 1: elect a leader, publish 3 messages through it, and wait until
+    // every node has applied them.
+    let leader = c.wait_leader().await;
+    for i in 0..3 {
+        c.raft(leader)
+            .publish(&cmd(&format!("m{i}")))
+            .await
+            .unwrap_or_else(|e| panic!("step 1: publish m{i} via leader {leader} failed: {e:?}"));
+    }
+    wait_all_applied(&c, 3, "step 1 initial publish").await;
+
+    // Step 2, follower restart: restart one follower from its own dir. It
+    // recovers applied index 3 and engine log length 3 (no double-apply), and
+    // a leader is known on all three nodes.
+    let leader = c.wait_leader().await;
+    let follower = (0..3).find(|i| *i != leader).expect("a follower");
+    c.kill(follower).await;
+    c.start_node(follower, 1024);
+    wait_all_applied(&c, 3, "step 2 follower restart").await;
+    wait_all_know_leader(&c, "step 2 follower restart").await;
+
+    // Step 3, leader restart: restart the current leader from its own dir
+    // without waiting for another leader first. Exactly one node must then
+    // report is_leader(). One more publish commits on every node with the same
+    // message ids and no duplicate.
+    let leader = c.wait_leader().await;
+    c.kill(leader).await;
+    c.start_node(leader, 1024);
+    wait_one_leader(&c, "step 3 leader restart").await;
+    let writer = c.wait_leader().await;
+    c.raft(writer)
+        .publish(&cmd("m3"))
+        .await
+        .unwrap_or_else(|e| panic!("step 3: publish m3 via leader {writer} failed: {e:?}"));
+    wait_all_applied(&c, 4, "step 3 publish after leader restart").await;
+    assert_identical_ids(&c, "step 3 publish after leader restart");
+
+    // Step 4, rolling restart: restart all three voters one after another,
+    // then wait for one leader and publish 1 more message. Every node reaches
+    // applied index 5 and log length 5 with the same message ids.
+    for id in 0..3 {
+        c.kill(id).await;
+        c.start_node(id, 1024);
+    }
+    wait_one_leader(&c, "step 4 after rolling restart").await;
+    let writer = c.wait_leader().await;
+    c.raft(writer)
+        .publish(&cmd("m4"))
+        .await
+        .unwrap_or_else(|e| panic!("step 4: publish m4 via leader {writer} failed: {e:?}"));
+    wait_all_applied(&c, 5, "step 4 publish after rolling restart").await;
+    assert_identical_ids(&c, "step 4 publish after rolling restart");
+
+    // Step 4 (again): publishing an already published message id does not
+    // grow the log. The outcome is deduped when it is reported.
+    let (idx, out) = c
+        .raft(writer)
+        .publish(&cmd("m0"))
+        .await
+        .unwrap_or_else(|e| panic!("step 4: re-publish m0 via leader {writer} failed: {e:?}"));
+    if let Some(out) = out {
+        assert!(
+            out.deduped,
+            "step 4: re-publish of m0 was not reported deduped"
+        );
+    }
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let behind: Vec<usize> = c
+            .live()
+            .filter(|(_, n)| n.raft.applied_index() < idx)
+            .map(|(i, _)| i)
+            .collect();
+        if behind.is_empty() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "step 4 re-publish m0: nodes not applied to index {idx}: {behind:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    for (i, _) in c.live() {
+        assert_eq!(
+            c.raft(i).relay().log_len("s").unwrap(),
+            5,
+            "step 4 re-publish m0: node {i} log grew"
+        );
+    }
+
+    c.shutdown().await;
 }
 
 // HANDWRITE-END
