@@ -183,10 +183,17 @@ impl InFlight {
         self.leases.insert(lease_id.into(), epoch);
     }
 
-    /// Acknowledge a lease. Returns whether a credit was freed (i.e. whether
-    /// the lease was actually in-flight for this session).
-    fn ack(&mut self, lease_id: &str) -> bool {
-        self.leases.remove(lease_id).is_some()
+    /// Acknowledge a lease. Returns whether a credit was freed: true only when
+    /// this session holds the lease with the same epoch the ack carries. A
+    /// mismatched epoch is fenced by the engine, so its entry stays in flight.
+    fn ack(&mut self, lease_id: &str, epoch: u64) -> bool {
+        match self.leases.get(lease_id) {
+            Some(&held) if held == epoch => {
+                self.leases.remove(lease_id);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Negative-acknowledge (release) a lease. Returns the epoch if the lease
@@ -334,11 +341,12 @@ async fn drive(
         tokio::select! {
             up_frame = read_up(&mut up, &mut dec) => match up_frame {
                 Some(ConsumeUp::Ack { lease_id, epoch }) => {
-                    if inflight.ack(&lease_id) {
-                        match &raft {
-                            Some(raft) => { let _ = raft.ack(subject.clone(), lease_id.clone(), epoch, Utc::now()).await; }
-                            None => { let _ = relay.ack(&subject, &lease_id, Some(epoch)); }
-                        }
+                    // Always forward the ack: the engine's epoch fence decides
+                    // whether it applies. InFlight only decides the credit.
+                    inflight.ack(&lease_id, epoch);
+                    match &raft {
+                        Some(raft) => { let _ = raft.ack(subject.clone(), lease_id.clone(), epoch, Utc::now()).await; }
+                        None => { let _ = relay.ack(&subject, &lease_id, Some(epoch)); }
                     }
                 }
                 Some(ConsumeUp::Nack { lease_id }) => {
@@ -418,7 +426,7 @@ mod tests {
         assert_eq!(inflight.epoch("lease-1"), Some(10));
 
         // Normal ack frees a credit
-        assert!(inflight.ack("lease-1"));
+        assert!(inflight.ack("lease-1", 10));
         assert_eq!(inflight.count(), 0);
         assert!(inflight.is_empty());
     }
@@ -441,7 +449,7 @@ mod tests {
         assert_eq!(inflight.count(), 1);
 
         // Unknown-id ack frees no credit
-        assert!(!inflight.ack("unknown-lease"));
+        assert!(!inflight.ack("unknown-lease", 1));
         assert_eq!(inflight.count(), 1);
 
         // Unknown-id nack returns None and frees no credit
@@ -460,11 +468,11 @@ mod tests {
         assert_eq!(inflight.count(), 2);
 
         // First ack succeeds and frees credit
-        assert!(inflight.ack("lease-1"));
+        assert!(inflight.ack("lease-1", 1));
         assert_eq!(inflight.count(), 1);
 
         // Duplicate ack frees no credit
-        assert!(!inflight.ack("lease-1"));
+        assert!(!inflight.ack("lease-1", 1));
         assert_eq!(inflight.count(), 1);
 
         // First nack succeeds and frees credit
@@ -473,6 +481,21 @@ mod tests {
 
         // Duplicate nack frees no credit
         assert_eq!(inflight.nack("lease-2"), None);
+        assert_eq!(inflight.count(), 0);
+    }
+
+    #[test]
+    fn inflight_stale_epoch_ack() {
+        let mut inflight = InFlight::new();
+        inflight.deliver("lease-1", 7);
+
+        // An ack whose epoch does not match the delivered one is fenced: no credit is freed
+        assert!(!inflight.ack("lease-1", 8));
+        assert_eq!(inflight.count(), 1);
+        assert_eq!(inflight.epoch("lease-1"), Some(7));
+
+        // The matching epoch frees the credit
+        assert!(inflight.ack("lease-1", 7));
         assert_eq!(inflight.count(), 0);
     }
 
@@ -490,18 +513,18 @@ mod tests {
         // 2. A sequence of bogus acks / nacks must not free credit or allow exceeding prefetch
         let bogus_attempts = ["fake-1", "fake-2", "lease-99", "nonexistent"];
         for bogus in bogus_attempts {
-            assert!(!inflight.ack(bogus));
+            assert!(!inflight.ack(bogus, 1));
             assert_eq!(inflight.nack(bogus), None);
             assert!(inflight.count() <= prefetch);
         }
         assert_eq!(inflight.count(), prefetch);
 
         // 3. Normal ack opens one slot
-        assert!(inflight.ack("lease-1"));
+        assert!(inflight.ack("lease-1", 1));
         assert_eq!(inflight.count(), prefetch - 1);
 
         // 4. Duplicate ack of already-acked lease must NOT open another slot
-        assert!(!inflight.ack("lease-1"));
+        assert!(!inflight.ack("lease-1", 1));
         assert_eq!(inflight.count(), prefetch - 1);
 
         // 5. Fill the single open slot with a new delivery
@@ -524,9 +547,9 @@ mod tests {
         assert!(inflight.count() <= prefetch);
 
         // Drain all remaining valid leases
-        assert!(inflight.ack("lease-3"));
-        assert!(inflight.ack("lease-4"));
-        assert!(inflight.ack("lease-5"));
+        assert!(inflight.ack("lease-3", 3));
+        assert!(inflight.ack("lease-4", 4));
+        assert!(inflight.ack("lease-5", 5));
         assert_eq!(inflight.count(), 0);
         assert!(inflight.is_empty());
     }
