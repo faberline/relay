@@ -38,5 +38,7 @@ spec:
     - metadata: {name: data}
       spec:
         accessModes: ["ReadWriteOnce"]
+        # N4 nodes take only Hyperdisk, and hyperdisk-balanced needs at least 4Gi.
+        storageClassName: dynamic-rwo
         resources:
-          requests: {storage: 1Gi}
+          requests: {storage: 4Gi}
