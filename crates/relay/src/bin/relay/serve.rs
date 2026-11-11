@@ -137,8 +137,8 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
     // process lifetime — dropping it would abort the tick/pump tasks.
     let mut peer_transport = None;
     let raft = if raft_runtime::cluster::replica_mode() {
-        let transport = relay::tls::peer::PeerTlsConfig::from_env()?
-            .map(|config| config.peer_transport())
+        let transport = peer_tls::PeerTlsConfig::from_env(relay::tls::PEER_ENV_PREFIX)?
+            .map(|config| raft_runtime::PeerTransport::from_config(&config))
             .transpose()?;
         let (peer_port, peer_scheme) =
             raft_peer_endpoint(&bind, args.raft_port, transport.is_some())?;

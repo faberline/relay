@@ -4322,7 +4322,6 @@ dependencies = [
  "relay-shared-kernel",
  "relay-storage",
  "reqwest",
- "rustls 0.23.40",
  "schemars",
  "serde",
  "serde_json",
