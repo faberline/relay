@@ -64,7 +64,7 @@ dogfooded through a three-voter leader-kill suite on the GKE test cluster. Auto-
 downward-API env (`REPLICAS_PER_SHARD` > 1) flips replica mode.
 
 - Gate: `cargo test -p relay --test it -- raft_core:: raft_persistence:: raft_cluster::`
-- Dogfood: `tests/it/e2e/raft_failover.rs` on `k8s/overlays/gke-test` (`.github/workflows/gke-test.yml`)
+- Dogfood: `tests/it/e2e/raft_failover.rs` on `k8s/overlays/gke-test` (`.github/workflows/ci.yml`)
 - Source: `crates/relay-replication/src/raft.rs`, [`docs/ha.md`](docs/ha.md)
 
 ### Interface

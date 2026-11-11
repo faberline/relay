@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # The GKE test Job's image for relay (faberline/aw docs/standards/rust-tests.md)
 # — NEVER user-facing. Target `test-client`: the `it` test binary, built for
-# x86_64-unknown-linux-musl by `.github/workflows/gke-test.yml`, as
+# x86_64-unknown-linux-musl by `.github/workflows/ci.yml`, as
 # /usr/local/bin/relay-it, plus kubectl for the suites' cluster steps. The
 # workflow stages the binary at
 #   dist/linux/amd64/relay-it
