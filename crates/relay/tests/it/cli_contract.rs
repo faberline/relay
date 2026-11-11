@@ -202,4 +202,85 @@ fn chainable_oracle_rejects_output_without_terminal_marker() {
         "assert_chainable must reject output without a next marker"
     );
 }
+
+fn last_non_empty_line(stdout: &str) -> &str {
+    stdout
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .expect("stdout has a non-empty line")
+}
+
+/// Close capability claim next-markers-on-write-and-backup-outputs (issue #8):
+/// a write output (`spec gen --out <dir>`, a render verb with `--out <file>`)
+/// ends stdout with the chainable marker, and `assert_chainable` accepts it.
+#[test]
+fn write_outputs_end_stdout_with_chainable_marker() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let spec_gen = relay(&[
+        "spec",
+        "gen",
+        "--lang",
+        "rust",
+        "--out",
+        dir.path().to_str().unwrap(),
+    ]);
+    assert!(spec_gen.status.success());
+    let stdout = String::from_utf8(spec_gen.stdout).unwrap();
+    assert_eq!(last_non_empty_line(&stdout), "next: done");
+    cli_std::chainable::assert_chainable(&stdout).expect("spec gen output is chainable");
+
+    let out_file = dir.path().join("relay.yaml");
+    let render = relay(&[
+        "k8s",
+        "instance",
+        "render",
+        "--profile",
+        "dev",
+        "--out",
+        out_file.to_str().unwrap(),
+    ]);
+    assert!(render.status.success());
+    assert!(out_file.is_file());
+    let stdout = String::from_utf8(render.stdout).unwrap();
+    assert_eq!(last_non_empty_line(&stdout), "next: done");
+    cli_std::chainable::assert_chainable(&stdout).expect("render --out output is chainable");
+}
+
+/// Close capability claim next-markers-on-write-and-backup-outputs (issue #8):
+/// the stdout-only form of a render verb prints the artifact and no `next:`
+/// line, so the artifact stream stays unwrapped.
+#[test]
+fn stdout_only_render_prints_artifact_without_next_line() {
+    let out = relay(&["k8s", "instance", "render", "--profile", "dev"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(!stdout.trim().is_empty(), "render prints the artifact");
+    assert!(
+        stdout.lines().all(|line| !line.starts_with("next:")),
+        "stdout-only render must not print a next: line"
+    );
+}
+
+/// Close capability claim next-markers-on-write-and-backup-outputs (issue #8):
+/// without the `backup` feature, `relay backup` refuses with the stable message.
+#[cfg(not(feature = "backup"))]
+#[test]
+fn backup_without_feature_refuses_with_stable_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = relay(&[
+        "backup",
+        "--url",
+        "http://127.0.0.1:1",
+        "--dest",
+        &format!("file://{}", dir.path().display()),
+    ]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("compiled without backup support"),
+        "stderr must say the build lacks backup support, got: {stderr}"
+    );
+}
 // HANDWRITE-END
