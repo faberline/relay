@@ -569,4 +569,60 @@ async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
         "artifact 20, seq {final_seq_marker}: final restored un-acked seqs match live engine"
     );
 }
+
+/// Close capability claim next-markers-on-write-and-backup-outputs (issue #8):
+/// `relay backup` against a live node (feature `backup`) ends stdout with the
+/// chainable marker, prints the `BackupRunResult` JSON before it, and writes
+/// the snapshot artifact to the `file://` sink.
+#[cfg(feature = "backup")]
+#[tokio::test(flavor = "multi_thread")]
+async fn relay_backup_verb_ends_stdout_with_chainable_marker() {
+    let (addr, state) = start_server().await;
+    state
+        .relay_handle()
+        .publish(
+            "jobs",
+            "m-1",
+            json!({"task": "t"}),
+            BTreeMap::new(),
+            Utc::now(),
+        )
+        .unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("http://{addr}");
+    let dest = format!("file://{}", dir.path().display());
+    // The server runs in this process, so the binary runs on a blocking thread.
+    let out = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_relay"))
+            .args(["backup", "--url", &url, "--dest", &dest])
+            .output()
+            .expect("run relay backup")
+    })
+    .await
+    .unwrap();
+    assert!(
+        out.status.success(),
+        "relay backup failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let last = stdout
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .expect("relay backup prints output");
+    assert_eq!(last, "next: done");
+    cli_std::chainable::assert_chainable(&stdout).expect("relay backup output is chainable");
+
+    let body = stdout
+        .trim_end()
+        .strip_suffix("next: done")
+        .expect("marker ends stdout");
+    serde_json::from_str::<serde_json::Value>(body).expect("JSON before the marker");
+
+    let written = std::fs::read_dir(dir.path()).unwrap().count();
+    assert!(written >= 1, "snapshot artifact written to the sink");
+}
 // HANDWRITE-END
