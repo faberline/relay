@@ -9,7 +9,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use super::cluster::{Cluster, CLUSTER_TEST_LOCK};
 use chrono::Utc;
 use raft_runtime::{Membership, RaftStateMachine};
 use relay::{
@@ -389,6 +391,160 @@ fn state_machine_completed_proposals_restored_prevent_double_apply() {
         }
         _ => panic!("outcomes mismatch: {outcome1:?} vs {outcome2:?}"),
     }
+}
+
+/// Poll until every live node's `applied_index()` equals `want`.
+async fn wait_applied(c: &Cluster, want: u64, step: &str) {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let lagging: Vec<(usize, u64)> = c
+            .live()
+            .filter_map(|(i, n)| {
+                let a = n.raft.applied_index();
+                (a != want).then_some((i, a))
+            })
+            .collect();
+        if lagging.is_empty() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{step}: nodes (id, applied_index) not at {want}: {lagging:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Issue #18 (multi-voter hard-state restart safety): a three-voter group over
+/// real h2c listeners with durable per-node dirs. Restarted voters keep their
+/// committed state (no double-apply) and rejoin; at most one leader serves at a
+/// time; no committed publish is lost across a follower or leader restart; and
+/// a full rolling restart still converges.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn restarted_voters_rejoin_with_hard_state_intact() {
+    let _guard = CLUSTER_TEST_LOCK.lock().await;
+    let mut c = Cluster::prepare(3).await;
+    c.start_all(1024);
+
+    // Step 1: elect, publish 3 through the leader, all nodes apply them.
+    let leader = c.wait_leader().await;
+    for i in 0..3 {
+        c.raft(leader)
+            .publish(&cmd(&format!("m{i}")))
+            .await
+            .unwrap_or_else(|e| panic!("step 1: publish m{i} failed: {e:?}"));
+    }
+    wait_applied(&c, 3, "step 1").await;
+
+    // Step 2: follower restart from its own dir.
+    let follower = (0..3).find(|i| *i != leader).unwrap();
+    c.kill(follower).await;
+    c.start_node(follower, 1024);
+    wait_applied(&c, 3, "step 2 follower restart").await;
+    for (i, n) in c.live() {
+        assert_eq!(
+            n.raft.relay().log_len("s").unwrap(),
+            3,
+            "step 2 follower restart: node {i} log_len (no double-apply)"
+        );
+    }
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let mut unknown = Vec::new();
+        for (i, n) in c.live() {
+            if n.raft.leader().await.is_none() {
+                unknown.push(i);
+            }
+        }
+        if unknown.is_empty() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "step 2 follower restart: nodes {unknown:?} do not know a leader"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Step 3: leader restart, without waiting for another leader first.
+    let leader = c.wait_leader().await;
+    c.kill(leader).await;
+    c.start_node(leader, 1024);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let mut leaders = Vec::new();
+        for (i, n) in c.live() {
+            if n.raft.is_leader().await {
+                leaders.push(i);
+            }
+        }
+        if leaders.len() == 1 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "step 3 leader restart: expected exactly one leader, is_leader() true on {leaders:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let live_id = (0..3).find(|i| *i != leader).unwrap();
+    c.raft(live_id)
+        .publish(&cmd("m3"))
+        .await
+        .expect("step 3: publish m3 through a live node");
+    wait_applied(&c, 4, "step 3 leader restart").await;
+    let expected: Vec<String> = ["m0", "m1", "m2", "m3"].map(String::from).to_vec();
+    for (i, _) in c.live() {
+        assert_eq!(
+            c.raft(i).relay().log_len("s").unwrap(),
+            4,
+            "step 3 leader restart: node {i} log_len"
+        );
+        assert_eq!(
+            c.message_ids(i),
+            expected,
+            "step 3 leader restart: node {i} message ids differ or duplicate"
+        );
+    }
+
+    // Step 4: rolling restart of all three nodes, then one more publish.
+    for id in 0..3 {
+        c.kill(id).await;
+        c.start_node(id, 1024);
+    }
+    c.wait_leader().await;
+    c.raft(0)
+        .publish(&cmd("m4"))
+        .await
+        .expect("step 4: publish m4 after rolling restart");
+    wait_applied(&c, 5, "step 4 rolling restart").await;
+    for (i, _) in c.live() {
+        assert_eq!(
+            c.raft(i).relay().log_len("s").unwrap(),
+            5,
+            "step 4 rolling restart: node {i} log_len"
+        );
+    }
+
+    // A republished message_id must not grow the log on the publishing node.
+    let (_, out) = c
+        .raft(0)
+        .publish(&cmd("m0"))
+        .await
+        .expect("step 4: republish m0");
+    if let Some(o) = out {
+        assert!(
+            o.deduped,
+            "step 4 rolling restart: republished m0 was not reported deduped"
+        );
+    }
+    assert_eq!(
+        c.raft(0).relay().log_len("s").unwrap(),
+        5,
+        "step 4 rolling restart: republished m0 grew log_len on node 0"
+    );
+
+    c.shutdown().await;
 }
 
 // HANDWRITE-END
