@@ -409,4 +409,76 @@ fn backup_cron_job_renders_only_when_policy_set() {
          tagged-union BackupDestination)"
     );
 }
+/// #110 — the operator ClusterRole grants every kind `render()` can emit, the
+/// backup CronJob included, so a Relay with `spec.backup` reconciles. Each
+/// rendered object needs one rule with its API group, resource and all seven
+/// verbs; no rule may use a wildcard.
+#[test]
+fn operator_cluster_role_covers_every_rendered_kind() {
+    let mut with_backup = spec(3);
+    with_backup.backup = Some(relay::operator::crd::RelayBackupSpec {
+        policy: service_backup::ScheduledBackupPolicy {
+            schedule: "0 3 * * *".into(),
+            destination: "s3://relay-backups/prod".into(),
+            retention_secs: Some(604_800),
+        },
+        admin_token_secret: Some("relay-backup-token".into()),
+    });
+    let mut cr = Relay::new("relay", with_backup);
+    cr.metadata.namespace = Some("production".into());
+    let objs = render(&cr);
+    assert!(
+        objs.iter().any(|o| o["kind"] == "CronJob"),
+        "render must emit the backup CronJob"
+    );
+
+    let rbac = include_str!("../../../../k8s/operator/rbac.yaml");
+    let docs: Vec<serde_yaml::Value> = serde_yaml::Deserializer::from_str(rbac)
+        .map(|doc| serde::Deserialize::deserialize(doc).expect("rbac.yaml document"))
+        .collect();
+    let role = docs
+        .iter()
+        .find(|d| d["kind"].as_str() == Some("ClusterRole"))
+        .expect("ClusterRole in rbac.yaml");
+    let rules = role["rules"].as_sequence().expect("ClusterRole rules");
+
+    let seq_has = |v: &serde_yaml::Value, want: &str| {
+        v.as_sequence()
+            .is_some_and(|s| s.iter().any(|x| x.as_str() == Some(want)))
+    };
+    for rule in rules {
+        for field in ["apiGroups", "resources", "verbs"] {
+            assert!(
+                !seq_has(&rule[field], "*"),
+                "wildcard in {field} of ClusterRole rule: {rule:?}"
+            );
+        }
+    }
+
+    let all_verbs = [
+        "get", "list", "watch", "create", "update", "patch", "delete",
+    ];
+    for obj in &objs {
+        let kind = obj["kind"].as_str().expect("rendered kind");
+        let api_version = obj["apiVersion"].as_str().expect("rendered apiVersion");
+        let group = api_version.split_once('/').map_or("", |(g, _)| g);
+        let resource = match kind {
+            "ServiceAccount" => "serviceaccounts",
+            "StatefulSet" => "statefulsets",
+            "Service" => "services",
+            "PodDisruptionBudget" => "poddisruptionbudgets",
+            "CronJob" => "cronjobs",
+            other => panic!("unknown rendered kind {other}: add it to this table"),
+        };
+        let covered = rules.iter().any(|rule| {
+            seq_has(&rule["apiGroups"], group)
+                && seq_has(&rule["resources"], resource)
+                && all_verbs.iter().all(|v| seq_has(&rule["verbs"], v))
+        });
+        assert!(
+            covered,
+            "ClusterRole lacks {group:?}/{resource} for rendered {kind}"
+        );
+    }
+}
 // HANDWRITE-END
