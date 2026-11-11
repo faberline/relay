@@ -111,26 +111,87 @@ pub const TOPICS: &[cli_std::llm::Topic] = &[
 // HANDWRITE-END
 
 /// `relay llm` flags.
-#[derive(clap::Args, Debug)]
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LlmArgs {
     /// Topic id (`outline` lists them all).
-    #[arg(default_value = "outline")]
-    pub(crate) topic: String,
+    #[arg(conflicts_with = "topic_flag")]
+    pub(crate) topic: Option<String>,
+    /// Topic id (`outline` lists them all).
+    #[arg(long = "topic", conflicts_with = "topic")]
+    pub(crate) topic_flag: Option<String>,
     /// Output format: `md` (default) or `json`.
     #[arg(long, default_value = "md")]
     pub(crate) format: String,
 }
 
+impl LlmArgs {
+    pub(crate) fn resolved_topic(&self) -> &str {
+        self.topic
+            .as_deref()
+            .or(self.topic_flag.as_deref())
+            .unwrap_or("outline")
+    }
+}
+
 /// `relay llm` — print agent-facing topics. Offline: no engine, no server,
 /// no I/O beyond stdout.
 pub(crate) fn run(args: LlmArgs) -> anyhow::Result<()> {
+    let topic = args.resolved_topic();
     let out = cli_std::llm::render(
         TOOL.project,
         TOOL.version,
         TOPICS,
-        &args.topic,
+        topic,
         cli_std::llm::Format::parse(&args.format),
     )?;
     println!("{out}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn topics_render_and_ids_are_unique_and_match_expected() {
+        cli_std::llm::assert_topics_render(TOPICS);
+
+        let ids: Vec<&str> = TOPICS.iter().map(|t| t.id).collect();
+        let unique_ids: HashSet<&str> = ids.iter().copied().collect();
+        assert_eq!(ids.len(), unique_ids.len(), "topic ids must be unique");
+
+        let mut expected = vec!["http-api", "operations"];
+        expected.sort();
+        let mut actual = ids;
+        actual.sort();
+        assert_eq!(
+            actual, expected,
+            "topic ids must be exactly http-api and operations"
+        );
+    }
+
+    #[test]
+    fn llm_args_resolved_topic() {
+        let args = LlmArgs {
+            topic: None,
+            topic_flag: None,
+            format: "md".to_string(),
+        };
+        assert_eq!(args.resolved_topic(), "outline");
+
+        let args = LlmArgs {
+            topic: Some("operations".to_string()),
+            topic_flag: None,
+            format: "md".to_string(),
+        };
+        assert_eq!(args.resolved_topic(), "operations");
+
+        let args = LlmArgs {
+            topic: None,
+            topic_flag: Some("operations".to_string()),
+            format: "md".to_string(),
+        };
+        assert_eq!(args.resolved_topic(), "operations");
+    }
 }
