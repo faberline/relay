@@ -89,15 +89,15 @@ fn shared_upgrade_issue_surface() {
         "create",
         "--dry-run",
         "--title",
-        "t",
+        "relay dry-run title probe",
         "it",
         "broke",
     ]);
     assert!(create_dry.status.success());
     let stdout = String::from_utf8(create_dry.stdout).unwrap();
     assert!(
-        stdout.contains("t"),
-        "create dry-run output must contain title 't'"
+        stdout.contains("relay dry-run title probe"),
+        "create dry-run output must contain title 'relay dry-run title probe'"
     );
     assert!(
         stdout.contains("app:relay"),
