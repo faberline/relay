@@ -6,23 +6,17 @@ How to change `relay`. What it promises and the work roots it owns live in
 [README.md](README.md); repository-wide authoring and verification rules live
 in [AW standards](https://github.com/faberline/aw/tree/main/docs/standards).
 
-Use the shared Faberline `issue-plan`, `issue-work`, and `issue-review`
-skills from [AW](https://github.com/faberline/aw/tree/main/plugins/faberline/skills).
-Each skill runs one pass; its `-loop` companion adds an explicit interval.
-Installing or updating a skill does not start a loop.
+Issues are delivered with the `aw-worker` skill from
+[AW](https://github.com/faberline/aw/tree/main/plugins/faberline/skills/aw-worker).
+One issue carries one `stage:` label at a time: `stage:spec` (write the
+spec), `stage:tdd` (tests first, then code; `aw` opens the pull request),
+`stage:review` (review a green pull request). `aw report passed` in review
+squash-merges the pull request and moves the issue to `stage:done`.
 
-Planning writes the bounded issue contract. Work submits one issue's PR and
-runs affected unit/static checks. CI runs the required functional, integration
-and performance checks. It alone sets `done` after all required current-input
-gates pass, leaving the issue open for independent local review. A required
-CI failure reports its evidence and returns the issue to `todo`. Review reads
-the issue, diff and current CI; it runs no tests and never merges, closes or
-changes lifecycle labels. The controller owns Git and final acceptance.
-
-Use the repository's existing complete gates for product claims. Keep local
-work limited to affected unit/static checks; functional, integration and
-performance execution belongs in authorized CI. Preserve all feature matrices,
-test selection checks, numeric limits and exact-head/base evidence.
+CI runs the required checks. The default branch requires the check `gate`
+and a pull request cannot merge before it is green on the exact head. Local
+work runs the affected unit and static checks listed under Verification.
+Keep all feature matrices, test selection checks and numeric limits.
 
 ## Verification
 
