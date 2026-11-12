@@ -13,7 +13,7 @@ members = ["crates/*"]
 # `version = "` line of this file.
 version = "0.4.13"
 edition = "2021"
-authors = ["Chris Cheng <chris.cheng.c4@gmail.com>"]
+authors = ["Faberline contributors"]
 license = "MIT"
 repository = "https://github.com/faberline/relay"
 
@@ -60,6 +60,7 @@ rcgen = "0.13"
 redis = { version = "0.27", features = ["tokio-comp"] }
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "system-proxy", "rustls-tls-native-roots", "json", "cookies", "gzip", "brotli", "multipart", "stream"] }
 rustls = "0.23"
+rustls-pemfile = "2"
 schemars = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
