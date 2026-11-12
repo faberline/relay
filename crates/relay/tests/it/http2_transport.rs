@@ -254,6 +254,220 @@ async fn readyz_flips_to_503_on_drain() {
     assert_eq!(draining.text().await.unwrap(), "draining");
 }
 
+/// Issue #26: close capability claim `drain-flips-readyz`.
+/// Once drain begins, `/readyz` answers 503 draining and keeps doing so,
+/// while `/healthz` stays 200 and work endpoints still answer over h2c so
+/// in-flight workers can finish during the grace period.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn drain_flips_readyz_and_keeps_serving() {
+    let (addr, state) = start_server().await;
+    let client = h2c_client();
+
+    let ready_before = client.get(url(addr, "/readyz")).send().await.unwrap();
+    assert_eq!(
+        ready_before.status(),
+        200,
+        "/readyz before drain: expected status 200"
+    );
+    assert_eq!(
+        ready_before.text().await.unwrap(),
+        "ok",
+        "/readyz before drain: expected body ok"
+    );
+
+    state.start_drain();
+    assert!(
+        state.is_draining(),
+        "/readyz after drain: state.is_draining() must be true"
+    );
+
+    let ready_after_1 = client.get(url(addr, "/readyz")).send().await.unwrap();
+    assert_eq!(
+        ready_after_1.status(),
+        503,
+        "/readyz after drain (request 1): expected status 503"
+    );
+    assert_eq!(
+        ready_after_1.text().await.unwrap(),
+        "draining",
+        "/readyz after drain (request 1): expected body draining"
+    );
+
+    let ready_after_2 = client.get(url(addr, "/readyz")).send().await.unwrap();
+    assert_eq!(
+        ready_after_2.status(),
+        503,
+        "/readyz after drain (request 2): expected status 503"
+    );
+    assert_eq!(
+        ready_after_2.text().await.unwrap(),
+        "draining",
+        "/readyz after drain (request 2): expected body draining"
+    );
+
+    let health_after = client.get(url(addr, "/healthz")).send().await.unwrap();
+    assert_eq!(
+        health_after.status(),
+        200,
+        "/healthz after drain: expected status 200"
+    );
+    assert_eq!(
+        health_after.text().await.unwrap(),
+        "ok",
+        "/healthz after drain: expected body ok"
+    );
+
+    let subject = "drain-queue";
+    let pub_res = publish(&client, addr, subject, "m0").await;
+    assert_eq!(
+        pub_res["seq"], 0,
+        "/v1/{subject}/publish after drain: expected seq 0"
+    );
+    assert_eq!(
+        pub_res["deduped"], false,
+        "/v1/{subject}/publish after drain: expected deduped false"
+    );
+
+    let lease_resp = client
+        .post(url(addr, &format!("/v1/{subject}/lease")))
+        .json(&LeaseRequest {
+            consumer_id: "c-drain".into(),
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        lease_resp.status(),
+        200,
+        "/v1/{subject}/lease after drain: expected status 200"
+    );
+    let lease_body: LeaseResponse = lease_resp.json().await.unwrap();
+    assert!(
+        lease_body.lease.is_some(),
+        "/v1/{subject}/lease after drain: expected a lease to be granted"
+    );
+    let lease = lease_body.lease.unwrap();
+    assert_eq!(
+        lease.seq, 0,
+        "/v1/{subject}/lease after drain: expected leased seq 0"
+    );
+
+    let ack_resp = client
+        .post(url(addr, &format!("/v1/{subject}/ack")))
+        .json(&json!({ "lease_id": lease.lease_id }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        ack_resp.status(),
+        200,
+        "/v1/{subject}/ack after drain: expected status 200"
+    );
+    let ack_body: AckResponse = ack_resp.json().await.unwrap();
+    assert!(
+        ack_body.acked,
+        "/v1/{subject}/ack after drain: expected acked true"
+    );
+    assert_eq!(
+        ack_body.committed_seq,
+        Some(0),
+        "/v1/{subject}/ack after drain: expected committed_seq Some(0)"
+    );
+}
+
+/// Issue #25: close capability claim `service-http-standard-probe-routes`.
+/// A drain flips `/readyz` to 503 `draining`, but `/healthz`, `/metrics`,
+/// `/openapi.json` and `/docs` keep answering 200 over h2c, so the pod is not killed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn service_http_standard_probe_routes_hold_during_drain() {
+    let (addr, state) = start_server().await;
+    let client = h2c_client();
+
+    for (path, needle) in [
+        ("/healthz", "ok"),
+        ("/readyz", "ok"),
+        ("/metrics", "relay_publish_requests_total"),
+        ("/openapi.json", "/v1/{subject}/publish"),
+        ("/docs", "swagger-ui"),
+    ] {
+        let resp = client.get(url(addr, path)).send().await.unwrap();
+        assert_eq!(
+            resp.version(),
+            reqwest::Version::HTTP_2,
+            "GET {path} before drain: expected HTTP/2"
+        );
+        assert_eq!(
+            resp.status(),
+            200,
+            "GET {path} before drain: expected status 200"
+        );
+        let body = resp.text().await.unwrap();
+        assert!(
+            body.contains(needle),
+            "GET {path} before drain: body must contain {needle:?}"
+        );
+    }
+
+    state.start_drain();
+
+    let ready = client.get(url(addr, "/readyz")).send().await.unwrap();
+    assert_eq!(
+        ready.version(),
+        reqwest::Version::HTTP_2,
+        "GET /readyz after drain: expected HTTP/2"
+    );
+    assert_eq!(
+        ready.status(),
+        503,
+        "GET /readyz after drain: expected status 503"
+    );
+    assert_eq!(
+        ready.text().await.unwrap(),
+        "draining",
+        "GET /readyz after drain: expected body draining"
+    );
+
+    let health = client.get(url(addr, "/healthz")).send().await.unwrap();
+    assert_eq!(
+        health.version(),
+        reqwest::Version::HTTP_2,
+        "GET /healthz after drain: expected HTTP/2"
+    );
+    assert_eq!(
+        health.status(),
+        200,
+        "GET /healthz after drain: expected status 200"
+    );
+    assert_eq!(
+        health.text().await.unwrap(),
+        "ok",
+        "GET /healthz after drain: expected body ok"
+    );
+
+    for (path, needle) in [
+        ("/metrics", "relay_publish_requests_total"),
+        ("/openapi.json", "/v1/{subject}/publish"),
+        ("/docs", "swagger-ui"),
+    ] {
+        let resp = client.get(url(addr, path)).send().await.unwrap();
+        assert_eq!(
+            resp.version(),
+            reqwest::Version::HTTP_2,
+            "GET {path} after drain: expected HTTP/2"
+        );
+        assert_eq!(
+            resp.status(),
+            200,
+            "GET {path} after drain: expected status 200"
+        );
+        let body = resp.text().await.unwrap();
+        assert!(
+            body.contains(needle),
+            "GET {path} after drain: body must contain {needle:?}"
+        );
+    }
+}
+
 /// #1205 AC2: an HTTP/2 prior-knowledge (h2c, via core/transport-h2c `h2c_client`)
 /// request AND an HTTP/1.1 request both succeed on the same serve port.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
