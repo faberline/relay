@@ -26,6 +26,7 @@ mod operator;
 mod ownership_contract;
 mod perf_gate;
 mod priority;
+mod public_tls;
 mod raft_cluster;
 mod raft_core;
 mod raft_peer_mtls;
