@@ -16,7 +16,9 @@ use serde_json::json;
 use relay::queue::server::{router, AppState};
 use relay::queue::server_config::RelayServerConfig;
 use relay::queue::wire::{
-    from_cbor, to_cbor, AckResponse, LeaseRequest, LeaseResponse, PublishRequest, CBOR,
+    from_cbor, to_cbor, AckBatchRequest, AckBatchResponse, AckOne, AckResponse, HeartbeatRequest,
+    HeartbeatResponse, LeaseBatchRequest, LeaseBatchResponse, LeaseRequest, LeaseResponse,
+    PublishBatchItem, PublishBatchRequest, PublishBatchResponse, PublishRequest, CBOR,
 };
 use relay::{AppendOutcome, DEFAULT_PRIORITY};
 
@@ -438,6 +440,283 @@ async fn oversized_body_rejection_renders_structured_413_envelope() {
         assert_eq!(body["error"], "payload_too_large");
         assert!(body["message"].as_str().unwrap().contains("size limit"));
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_batch_over_h2c() {
+    let (addr, _state) = start_server().await;
+    let client = h2c_client();
+
+    let items = vec![
+        PublishBatchItem {
+            message_id: "m0".into(),
+            payload: json!({ "n": 0 }),
+            headers: Default::default(),
+            priority: DEFAULT_PRIORITY,
+        },
+        PublishBatchItem {
+            message_id: "m1".into(),
+            payload: json!({ "n": 1 }),
+            headers: Default::default(),
+            priority: DEFAULT_PRIORITY,
+        },
+        PublishBatchItem {
+            message_id: "m2".into(),
+            payload: json!({ "n": 2 }),
+            headers: Default::default(),
+            priority: DEFAULT_PRIORITY,
+        },
+    ];
+
+    let resp = client
+        .post(url(addr, "/v1/s/publish-batch"))
+        .json(&PublishBatchRequest {
+            messages: items.clone(),
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let batch_resp: PublishBatchResponse = resp.json().await.unwrap();
+    assert_eq!(batch_resp.outcomes.len(), items.len());
+    for (i, outcome) in batch_resp.outcomes.iter().enumerate() {
+        assert_eq!(outcome.seq, i as u64);
+        assert!(!outcome.deduped);
+    }
+
+    let len_resp = client.get(url(addr, "/v1/s/len")).send().await.unwrap();
+    assert_eq!(len_resp.status(), 200);
+    let len_body: serde_json::Value = len_resp.json().await.unwrap();
+    assert_eq!(len_body["latest_seq"], items.len() as u64);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lease_batch_and_ack_batch_over_h2c() {
+    let (addr, _state) = start_server().await;
+    let client = h2c_client();
+
+    let items = vec![
+        PublishBatchItem {
+            message_id: "m0".into(),
+            payload: json!({ "n": 0 }),
+            headers: Default::default(),
+            priority: DEFAULT_PRIORITY,
+        },
+        PublishBatchItem {
+            message_id: "m1".into(),
+            payload: json!({ "n": 1 }),
+            headers: Default::default(),
+            priority: DEFAULT_PRIORITY,
+        },
+        PublishBatchItem {
+            message_id: "m2".into(),
+            payload: json!({ "n": 2 }),
+            headers: Default::default(),
+            priority: DEFAULT_PRIORITY,
+        },
+    ];
+    let pub_resp = client
+        .post(url(addr, "/v1/s/publish-batch"))
+        .json(&PublishBatchRequest { messages: items })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(pub_resp.status(), 200);
+
+    let lease_resp = client
+        .post(url(addr, "/v1/s/lease-batch"))
+        .json(&LeaseBatchRequest {
+            consumer_id: "c1".into(),
+            max: 10,
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(lease_resp.status(), 200);
+    let lease_batch: LeaseBatchResponse = lease_resp.json().await.unwrap();
+    assert_eq!(lease_batch.leases.len(), 3);
+
+    let acks: Vec<AckOne> = lease_batch
+        .leases
+        .iter()
+        .map(|l| AckOne {
+            lease_id: l.lease_id.clone(),
+            epoch: Some(l.epoch),
+        })
+        .collect();
+
+    let ack_resp = client
+        .post(url(addr, "/v1/s/ack-batch"))
+        .json(&AckBatchRequest { acks })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ack_resp.status(), 200);
+    let ack_batch: AckBatchResponse = ack_resp.json().await.unwrap();
+    assert_eq!(ack_batch.acked, 3);
+    assert_eq!(ack_batch.committed_seq, Some(2));
+
+    let second_lease_resp = client
+        .post(url(addr, "/v1/s/lease-batch"))
+        .json(&LeaseBatchRequest {
+            consumer_id: "c1".into(),
+            max: 10,
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second_lease_resp.status(), 200);
+    let second_lease_batch: LeaseBatchResponse = second_lease_resp.json().await.unwrap();
+    assert!(second_lease_batch.leases.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn heartbeat_over_h2c() {
+    let (addr, _state) = start_server().await;
+    let client = h2c_client();
+    publish(&client, addr, "s", "m0").await;
+
+    let lease_resp: LeaseResponse = client
+        .post(url(addr, "/v1/s/lease"))
+        .json(&LeaseRequest {
+            consumer_id: "c1".into(),
+        })
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let lease = lease_resp.lease.expect("a lease was granted");
+
+    let hb_resp = client
+        .post(url(addr, "/v1/s/heartbeat"))
+        .json(&HeartbeatRequest {
+            lease_id: lease.lease_id.clone(),
+            epoch: lease.epoch,
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(hb_resp.status(), 200);
+    let hb: HeartbeatResponse = hb_resp.json().await.unwrap();
+    assert!(hb.extended);
+    assert!(hb.expires_at.is_some());
+
+    let bad_hb_resp = client
+        .post(url(addr, "/v1/s/heartbeat"))
+        .json(&HeartbeatRequest {
+            lease_id: lease.lease_id.clone(),
+            epoch: lease.epoch + 999,
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_hb_resp.status(), 200);
+    let bad_hb: HeartbeatResponse = bad_hb_resp.json().await.unwrap();
+    assert!(!bad_hb.extended);
+    assert!(bad_hb.expires_at.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn consume_stream_delivers_and_acks_over_h2c() {
+    let (addr, state) = start_server().await;
+    let client = h2c_client();
+    publish(&client, addr, "s", "m0").await;
+
+    let (req_tx, req_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(4);
+    let req_stream = futures::stream::unfold(req_rx, |mut rx| async move {
+        rx.recv()
+            .await
+            .map(|chunk| (Ok::<Vec<u8>, std::convert::Infallible>(chunk), rx))
+    });
+    let body = reqwest::Body::wrap_stream(req_stream);
+
+    req_tx
+        .send(consume_frame(&json!({
+            "type": "subscribe",
+            "prefetch": 1,
+        })))
+        .await
+        .unwrap();
+
+    let mut resp = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        client.post(url(addr, "/v1/s/consume")).body(body).send(),
+    )
+    .await
+    .expect("connect timeout")
+    .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let mut buf = Vec::new();
+    let down_bytes = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if buf.len() >= 4 {
+                let len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+                if buf.len() >= 4 + len {
+                    let frame = buf[4..4 + len].to_vec();
+                    buf.drain(..4 + len);
+                    return frame;
+                }
+            }
+            match resp.chunk().await {
+                Ok(Some(chunk)) => buf.extend_from_slice(&chunk),
+                Ok(None) => panic!("stream ended before frame complete"),
+                Err(e) => panic!("stream read error: {e}"),
+            }
+        }
+    })
+    .await
+    .expect("timeout reading down frame");
+
+    let down_val: serde_json::Value = serde_json::from_slice(&down_bytes).unwrap();
+    assert_eq!(down_val["message_id"], "m0");
+    let lease_id = down_val["lease_id"].as_str().expect("lease_id").to_string();
+    let epoch = down_val["epoch"].as_u64().expect("epoch");
+    assert!(!lease_id.is_empty());
+
+    req_tx
+        .send(consume_frame(&json!({
+            "type": "ack",
+            "lease_id": lease_id,
+            "epoch": epoch,
+        })))
+        .await
+        .unwrap();
+    drop(req_tx);
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Ok(Some(committed)) = state.relay_handle().committed_offset("s") {
+                if committed.committed_seq == 0 {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("timeout waiting for committed offset");
+
+    let later = chrono::Utc::now() + chrono::Duration::seconds(60);
+    state.relay_handle().reclaim_expired("s", later).unwrap();
+
+    let lease_check: LeaseResponse = client
+        .post(url(addr, "/v1/s/lease"))
+        .json(&LeaseRequest {
+            consumer_id: "c2".into(),
+        })
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        lease_check.lease.is_none(),
+        "acked entry must not be leased again"
+    );
 }
 
 // HANDWRITE-END
