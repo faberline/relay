@@ -10,8 +10,21 @@ no-default-features = false
 [advisories]
 db-path = "~/.cargo/advisory-db"
 version = 2
-# Ignore specific advisories (none currently)
-ignore = []
+# Ignored: no fixed version can be used here. Review when async-nats, kube or serde_yaml move.
+ignore = [
+    # rustls-webpki 0.102.8 comes only through the dev dependency async-nats 0.38; the fix needs rustls-webpki >= 0.103.16, which async-nats 0.38 does not allow.
+    { id = "RUSTSEC-2026-0049", reason = "rustls-webpki 0.102.8 only via dev dependency async-nats 0.38; fixed only in >=0.103.16" },
+    { id = "RUSTSEC-2026-0098", reason = "rustls-webpki 0.102.8 only via dev dependency async-nats 0.38; fixed only in >=0.103.16" },
+    { id = "RUSTSEC-2026-0099", reason = "rustls-webpki 0.102.8 only via dev dependency async-nats 0.38; fixed only in >=0.103.16" },
+    { id = "RUSTSEC-2026-0104", reason = "rustls-webpki 0.102.8 only via dev dependency async-nats 0.38; fixed only in >=0.103.16" },
+    { id = "RUSTSEC-2026-0382", reason = "rustls-webpki 0.102.8 only via dev dependency async-nats 0.38; fixed only in >=0.103.16" },
+    # Unmaintained crates with no fixed version.
+    { id = "RUSTSEC-2025-0012", reason = "backoff 0.4.0 unmaintained, via kube-runtime 0.98.0; no fixed version" },
+    { id = "RUSTSEC-2024-0384", reason = "instant 0.1.13 unmaintained, via backoff; no fixed version" },
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error 1.0.4 unmaintained; no fixed version" },
+    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile 2.2.0 unmaintained; no fixed version" },
+    { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml unmaintained, via serde_yaml; no fixed version" },
+]
 
 [licenses]
 version = 2

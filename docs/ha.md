@@ -97,4 +97,14 @@ mutual identity validation and dials every peer over the same reloadable
 certificate snapshot. Unknown CAs, wrong server identities, expired chains,
 and malformed rotations fail closed before the Raft router. Plain h2c remains
 available only when peer mTLS is explicitly disabled for local development.
+
+## Public API TLS
+
+Set `RELAY_TLS_CERT` and `RELAY_TLS_KEY` to PEM file paths to serve the public
+client API over TLS. The listener offers ALPN `h2` and `http/1.1`. Set both or
+neither: with only one set, `relay` exits at startup with an error that names
+both variables. With neither set, the client listener stays cleartext. The
+probes stay tokenless on the TLS listener. Client mTLS and certificate rotation
+are not part of this version.
+
 <!-- HANDWRITE-END -->
