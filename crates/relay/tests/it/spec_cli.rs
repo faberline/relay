@@ -6,7 +6,11 @@
 //! through the shared `openapi-codegen`, and the `llm` operations topic
 //! names the backup / peer-TLS / spec surfaces. No server, no network.
 
+use std::net::SocketAddr;
 use std::process::Command;
+
+use relay::queue::server::{router, AppState};
+use relay::queue::server_config::RelayServerConfig;
 
 fn run(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_relay"))
@@ -312,5 +316,85 @@ fn raw_spec_artifact_streams_stay_unwrapped() {
             );
         }
     }
+}
+async fn start_server() -> SocketAddr {
+    let state = AppState::new(RelayServerConfig::ephemeral(), 8 * 1024 * 1024);
+    let app = router(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(service_http::serve(
+        listener,
+        app,
+        std::future::pending::<()>(),
+    ));
+    addr
+}
+
+/// offline spec matches served contract
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn offline_spec_matches_served_contract() {
+    let addr = start_server().await;
+    let resp = reqwest::Client::new()
+        .get(format!("http://{addr}/openapi.json"))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "GET /openapi.json must succeed");
+    let served: serde_json::Value = resp.json().await.unwrap();
+
+    let offline: serde_json::Value =
+        serde_json::from_str(&stdout(&["spec"])).expect("offline spec is JSON");
+    assert_eq!(
+        offline, served,
+        "offline `relay spec` differs from served /openapi.json"
+    );
+
+    let mut paths: Vec<String> = served["paths"]
+        .as_object()
+        .expect("served document has paths")
+        .keys()
+        .cloned()
+        .collect();
+    paths.sort();
+    let expected: Vec<String> = [
+        "/admin/backup",
+        "/v1/{subject}/ack",
+        "/v1/{subject}/ack-batch",
+        "/v1/{subject}/consume",
+        "/v1/{subject}/heartbeat",
+        "/v1/{subject}/lease",
+        "/v1/{subject}/lease-batch",
+        "/v1/{subject}/len",
+        "/v1/{subject}/publish",
+        "/v1/{subject}/publish-batch",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    assert_eq!(
+        paths, expected,
+        "the route table in crates/relay-queue/src/server.rs (router_with_admission) and the OpenAPI paths in crates/relay-queue/src/openapi.rs must list the same paths"
+    );
+}
+
+/// offline spec yaml and json-schema views match json
+#[test]
+fn offline_spec_yaml_and_json_schema_views_match_json() {
+    let json: serde_json::Value = serde_json::from_str(&stdout(&["spec"])).expect("spec JSON");
+
+    let yaml: serde_json::Value =
+        serde_yaml::from_str(&stdout(&["spec", "--format", "openapi-yaml"])).expect("spec YAML");
+    assert_eq!(
+        yaml, json,
+        "openapi-yaml view differs from the JSON document"
+    );
+
+    let schema: serde_json::Value =
+        serde_json::from_str(&stdout(&["spec", "--format", "json-schema"]))
+            .expect("json-schema JSON");
+    assert_eq!(
+        schema["components"], json["components"],
+        "json-schema view differs from the components of the JSON document"
+    );
 }
 // HANDWRITE-END
