@@ -20,6 +20,7 @@
 //! [`peer`] is relay's thin adapter over the shared peer-mTLS material loader.
 
 pub mod peer;
+pub mod public;
 
 /// Install the aws-lc-rs rustls crypto provider as the process default, once.
 ///
