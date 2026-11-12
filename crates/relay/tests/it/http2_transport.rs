@@ -840,4 +840,31 @@ async fn consume_stream_delivers_and_acks_over_h2c() {
     );
 }
 
+/// Issue #24 AC4: the served `/openapi.json` lists exactly the paths that the
+/// offline `relay spec` lists.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn served_openapi_paths_match_offline_spec() {
+    let (addr, _state) = start_server().await;
+    let resp = reqwest::Client::new()
+        .get(url(addr, "/openapi.json"))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "GET /openapi.json must succeed");
+    let served: serde_json::Value = resp.json().await.unwrap();
+    let mut served_paths: Vec<String> = served["paths"]
+        .as_object()
+        .expect("served document has paths")
+        .keys()
+        .cloned()
+        .collect();
+    served_paths.sort();
+
+    assert_eq!(
+        served_paths,
+        crate::spec_cli::relay_spec_paths(),
+        "served /openapi.json paths must equal the offline `relay spec` paths"
+    );
+}
+
 // HANDWRITE-END
