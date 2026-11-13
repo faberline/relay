@@ -118,3 +118,4 @@ That is why the arena claim is split rather than hiding the losing cell.
   local baseline for publish / lease+ack.
 - Gate rule + workload smoke: [`tests/it/perf_gate.rs`](../tests/it/perf_gate.rs).
 - Required measured envelope: [`tests/it/measured_performance.rs`](../tests/it/measured_performance.rs).
+- Local competitor semantics and efficiency gate (issue #50): [`scripts/verify-competitor-efficiency.sh`](../scripts/verify-competitor-efficiency.sh); its record is [`operations/competitor-efficiency.md`](operations/competitor-efficiency.md).
