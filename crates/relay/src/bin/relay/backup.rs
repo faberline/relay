@@ -50,6 +50,6 @@ pub(crate) async fn run(args: BackupArgs) -> Result<()> {
 pub(crate) async fn run(_args: BackupArgs) -> Result<()> {
     anyhow::bail!(
         "this relay build was compiled without backup support; rebuild with \
-         `--features backup` (the published image includes it)"
+         `--features backup` (release builds enable it, local default builds do not)"
     )
 }
