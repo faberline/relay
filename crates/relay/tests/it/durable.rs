@@ -45,7 +45,7 @@ fn count_subject_segments(dir: &std::path::Path, subject: &str) -> usize {
         .filter(|e| {
             let n = e.file_name();
             let n = n.to_string_lossy();
-            n.starts_with(&prefix) && n.ends_with(".ndjson")
+            n.starts_with(&prefix) && n.ends_with(".frames")
         })
         .count()
 }
