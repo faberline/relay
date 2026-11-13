@@ -178,22 +178,23 @@ security_behavior() {
 }
 
 security_boundaries() {
-  list_suite security-peer-tls cargo test -q -p relay --lib tls::peer::tests:: -- --list
+  list_suite security-peer-tls cargo test -q -p relay --lib tls::tests:: -- --list
   require_listed security-peer-tls \
-    tls::peer::tests::builds_rustls_peer_configs_from_pem_material \
-    tls::peer::tests::empty_ca_file_returns_err \
-    tls::peer::tests::from_env_errors_on_partial_config \
-    tls::peer::tests::from_env_loads_when_all_set \
-    tls::peer::tests::from_env_returns_none_when_nothing_set \
-    tls::peer::tests::mis_pointed_ca_path_fails_fast_naming_the_path \
-    tls::peer::tests::mis_pointed_cert_path_fails_fast_naming_the_path \
-    tls::peer::tests::mis_pointed_key_path_fails_fast_naming_the_path \
-    tls::peer::tests::mismatched_key_returns_err_from_rustls_server_config \
-    tls::peer::tests::non_pem_ca_file_fails_rustls_configs \
-    tls::peer::tests::non_pem_cert_file_fails_rustls_configs \
-    tls::peer::tests::non_pem_key_file_fails_rustls_configs
-  run_suite security-peer-tls 12 - \
-    cargo test -q -p relay --lib tls::peer::tests:: -- --nocapture
+    tls::tests::builds_rustls_peer_configs_from_pem_material \
+    tls::tests::empty_ca_file_returns_err \
+    tls::tests::from_env_errors_on_partial_config \
+    tls::tests::from_env_loads_when_all_set \
+    tls::tests::from_env_returns_none_when_nothing_set \
+    tls::tests::mis_pointed_ca_path_fails_fast_naming_the_path \
+    tls::tests::mis_pointed_cert_path_fails_fast_naming_the_path \
+    tls::tests::mis_pointed_key_path_fails_fast_naming_the_path \
+    tls::tests::mismatched_key_returns_err_from_rustls_server_config \
+    tls::tests::non_pem_ca_file_fails_rustls_configs \
+    tls::tests::non_pem_cert_file_fails_rustls_configs \
+    tls::tests::non_pem_key_file_fails_rustls_configs \
+    tls::tests::peer_env_prefix_keeps_the_relay_contract
+  run_suite security-peer-tls 13 - \
+    cargo test -q -p relay --lib tls::tests:: -- --nocapture
 
   list_suite security-peer cargo test -q -p relay --test it raft_peer_mtls:: -- --list
   require_listed security-peer \
