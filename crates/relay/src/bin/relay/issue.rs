@@ -22,6 +22,8 @@ pub(crate) enum IssueCommand {
     View(IssueViewArgs),
     /// File a structured issue (auto-tagged `app:relay`).
     Create(IssueCreateArgs),
+    /// Comment on an issue.
+    Comment(IssueCommentArgs),
 }
 
 /// `relay issue search [query] [--state] [--limit]` flags.
@@ -55,6 +57,25 @@ pub(crate) struct IssueCreateArgs {
     #[arg(long)]
     pub(crate) dry_run: bool,
     /// Free-text description of the problem.
+    #[arg(num_args = 0..)]
+    pub(crate) message: Vec<String>,
+}
+
+/// `relay issue comment <number> [message...] [--repo <owner/name>] [--dry-run] [-y|--yes]` flags.
+#[derive(clap::Args, Debug)]
+pub(crate) struct IssueCommentArgs {
+    /// Issue number.
+    pub(crate) number: u64,
+    /// Target repository (`owner/name`).
+    #[arg(long)]
+    pub(crate) repo: Option<String>,
+    /// Print what would be commented without sending it.
+    #[arg(long)]
+    pub(crate) dry_run: bool,
+    /// Skip confirmation prompt.
+    #[arg(short = 'y', long)]
+    pub(crate) yes: bool,
+    /// Comment body.
     #[arg(num_args = 0..)]
     pub(crate) message: Vec<String>,
 }
@@ -102,5 +123,61 @@ pub(crate) async fn run(args: IssueArgs) -> Result<()> {
             )
             .await
         }
+        IssueCommand::Comment(m) => {
+            let msg = m.message.join(" ");
+            let message = (!msg.trim().is_empty()).then_some(msg);
+            cli_std::issue::comment(
+                &TOOL,
+                cli_std::issue::CommentOptions {
+                    number: m.number,
+                    message,
+                    repo: m.repo,
+                    dry_run: m.dry_run,
+                    yes: m.yes,
+                },
+            )
+            .await
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_comment_zero() {
+        let res = cli_std::issue::comment(
+            &TOOL,
+            cli_std::issue::CommentOptions {
+                number: 0,
+                message: Some("test".into()),
+                repo: None,
+                dry_run: true,
+                yes: true,
+            },
+        )
+        .await;
+        assert!(res.is_err(), "comment(0) should be err, got: {:?}", res);
+    }
+
+    #[tokio::test]
+    async fn test_comment_dry_run() {
+        let res = cli_std::issue::comment(
+            &TOOL,
+            cli_std::issue::CommentOptions {
+                number: 123,
+                message: Some("still broken".into()),
+                repo: None,
+                dry_run: true,
+                yes: true,
+            },
+        )
+        .await;
+        assert!(
+            res.is_ok(),
+            "comment dry run should succeed, got: {:?}",
+            res
+        );
     }
 }

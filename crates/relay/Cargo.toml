@@ -87,6 +87,7 @@ service-backup.workspace = true
 peer-tls.workspace = true
 # rustls config types surfaced by the peer_tls builder passthroughs.
 rustls.workspace = true
+rustls-pemfile.workspace = true
 # Shared polyglot OpenAPI client codegen (#1209, keep #777): `relay spec gen`.
 openapi-codegen.workspace = true
 # HTTP client for `relay backup`'s snapshot fetch (feature `backup` only).
