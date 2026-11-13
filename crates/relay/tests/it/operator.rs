@@ -409,4 +409,111 @@ fn backup_cron_job_renders_only_when_policy_set() {
          tagged-union BackupDestination)"
     );
 }
+
+/// True when every key of `selector` is in `labels` with the same value, and
+/// `selector` is not empty.
+fn selects(selector: &Value, labels: &Value) -> bool {
+    let Some(selector) = selector.as_object().filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    selector.iter().all(|(k, v)| labels.get(k) == Some(v))
+}
+
+/// The rendered StatefulSet, headless Service, client Service and PDB link up
+/// for raft peer discovery.
+#[test]
+fn render_links_statefulset_services_and_pdb() {
+    let objs = render(&Relay::new("relay", spec(3)));
+    let sts = of_kind(&objs, "StatefulSet");
+    let services: Vec<&Value> = objs.iter().filter(|o| o["kind"] == "Service").collect();
+    assert_eq!(
+        services.len(),
+        2,
+        "render must emit a headless and a client Service"
+    );
+    let headless = services
+        .iter()
+        .copied()
+        .find(|s| s["spec"]["clusterIP"] == "None")
+        .expect("render has no Service with clusterIP None");
+    let client = services
+        .iter()
+        .copied()
+        .find(|s| s["spec"]["clusterIP"].is_null())
+        .expect("render has no client Service");
+    let pdb = of_kind(&objs, "PodDisruptionBudget");
+
+    assert_eq!(
+        headless["metadata"]["name"], "relay-headless",
+        "headless Service name"
+    );
+    assert_eq!(
+        sts["spec"]["serviceName"], headless["metadata"]["name"],
+        "StatefulSet serviceName must name the headless Service"
+    );
+    assert_eq!(
+        headless["spec"]["publishNotReadyAddresses"], true,
+        "headless Service must publishNotReadyAddresses"
+    );
+
+    let container = &sts["spec"]["template"]["spec"]["containers"][0];
+    let container_ports = container["ports"].as_array().expect("container ports");
+    for (name, number) in [("http", 7000), ("raft", 7001)] {
+        let port = headless["spec"]["ports"]
+            .as_array()
+            .expect("headless ports")
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("headless Service has no port named {name}"));
+        assert_eq!(port["port"], number, "headless Service port {name} number");
+        assert_eq!(
+            port["targetPort"], name,
+            "headless Service port {name} must target the container port name"
+        );
+        let on_container = container_ports
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("StatefulSet container has no port named {name}"));
+        assert_eq!(
+            on_container["containerPort"], number,
+            "StatefulSet container port {name} must equal the Service port"
+        );
+    }
+
+    let env = env_of(sts);
+    let get = |k: &str| {
+        env.iter()
+            .find(|(n, _)| *n == k)
+            .unwrap_or_else(|| panic!("missing env {k}"))
+            .1
+    };
+    assert_eq!(
+        get("RELAY_PEER_SERVICE")["value"],
+        headless["metadata"]["name"],
+        "env RELAY_PEER_SERVICE must equal the headless Service name"
+    );
+    assert_eq!(
+        get("RELAY_RAFT_PORT")["value"],
+        "7001",
+        "env RELAY_RAFT_PORT must equal the raft container port"
+    );
+
+    let pod_labels = &sts["spec"]["template"]["metadata"]["labels"];
+    assert!(
+        selects(&sts["spec"]["selector"]["matchLabels"], pod_labels),
+        "StatefulSet selector must match the pod template labels"
+    );
+    assert!(
+        selects(&headless["spec"]["selector"], pod_labels),
+        "headless Service selector must match the pod labels"
+    );
+    assert!(
+        selects(&client["spec"]["selector"], pod_labels),
+        "client Service selector must match the pod labels"
+    );
+    assert!(
+        selects(&pdb["spec"]["selector"]["matchLabels"], pod_labels),
+        "PodDisruptionBudget selector must match the pod labels"
+    );
+}
 // HANDWRITE-END
