@@ -3,7 +3,8 @@
 //! Durable ordered log substrate for one `(subject, shard)`.
 //!
 //! Append assigns a monotonic, gap-free [`Seq`], dedupes on [`MessageId`], and
-//! persists entries as newline-delimited JSON. Storage is **segmented** (#131):
+//! persists entries as core `storage-durable` frames (one JSON entry per frame,
+//! in `.frames` segment files). Storage is **segmented** (#131):
 //! the active segment rolls at `segment_bytes`. Retention is delete-on-ack only
 //! ([`Log::truncate_below_acked`]): the engine calls it after durably
 //! persisting the work-queue committed watermark, dropping the oldest whole
@@ -14,18 +15,19 @@
 //! via a per-segment byte-offset index. The dedupe map is a FIFO window.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::fs::{create_dir_all, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, BufWriter, Seek, SeekFrom, Write};
+use std::fs::{create_dir_all, File};
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
+use storage_durable::{FramedLogCursor, FramedLogWriter, FsyncPolicy as CoreFsync};
 
 use relay_shared_kernel::config::{FsyncPolicy, RelayCoreConfig};
 use relay_shared_kernel::types::{
     AppendOutcome, LogEntry, MessageId, Payload, Seq, ShardId, Subject, DEFAULT_PRIORITY,
 };
 
-/// One on-disk NDJSON segment holding seqs `[base_seq, next segment's base_seq)`.
+/// One on-disk framed segment holding seqs `[base_seq, next segment's base_seq)`.
 struct Segment {
     base_seq: Seq,
     path: PathBuf,
@@ -57,7 +59,7 @@ pub struct Log {
     dir: Option<PathBuf>,
     segment_bytes: u64,
     segments: Vec<Segment>,
-    writer: Option<BufWriter<File>>,
+    writer: Option<FramedLogWriter>,
     /// Bytes in the active (last) segment.
     active_bytes: u64,
     commit_path: Option<PathBuf>,
@@ -90,6 +92,24 @@ const INDEX_STRIDE: Seq = 64;
 /// Whether `seq` is sampled into the sparse index for a segment based at `base`.
 fn is_indexed(seq: Seq, base: Seq) -> bool {
     seq == base || (seq - base).is_multiple_of(INDEX_STRIDE)
+}
+
+/// Bytes of core's frame header (seq u64, len u32, crc32 u32) before each payload.
+const FRAME_HEADER_BYTES: u64 = 16;
+
+/// Core `storage-durable` returns `anyhow::Result`; surface it as `io::Error`.
+fn io_err(e: impl std::fmt::Display) -> io::Error {
+    io::Error::other(e.to_string())
+}
+
+/// Map relay's fsync policy onto core's. Core syncs inside `append` only under
+/// `Always`; relay flushes and syncs at its own points (see `append_at`).
+fn core_policy(policy: FsyncPolicy) -> CoreFsync {
+    match policy {
+        FsyncPolicy::Always => CoreFsync::Always,
+        FsyncPolicy::Interval => CoreFsync::Interval,
+        FsyncPolicy::Os => CoreFsync::Os,
+    }
 }
 
 impl Log {
@@ -129,14 +149,24 @@ impl Log {
         create_dir_all(&dir)?;
         log.commit_path = Some(dir.join(format!("{}__shard{}.commit", sanitize(subject), shard)));
 
-        // Discover existing segment files: <subject>__shardN__<base>.ndjson
+        // Discover existing segment files: <subject>__shardN__<base>.frames.
+        // A legacy `.ndjson` segment of this log is refused, never read or deleted.
         let prefix = format!("{}__shard{}__", sanitize(subject), shard);
         let mut found: Vec<(Seq, PathBuf)> = Vec::new();
         for ent in std::fs::read_dir(&dir)? {
             let path = ent?.path();
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                 if let Some(rest) = name.strip_prefix(&prefix) {
-                    if let Some(base) = rest.strip_suffix(".ndjson") {
+                    if rest.ends_with(".ndjson") {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "legacy NDJSON log file {} found: relay now stores logs as framed binary files (.frames); old data is not migrated and not deleted, see docs/operations/log-format-break.md",
+                                path.display()
+                            ),
+                        ));
+                    }
+                    if let Some(base) = rest.strip_suffix(".frames") {
                         if let Ok(b) = base.parse::<Seq>() {
                             found.push((b, path));
                         }
@@ -152,9 +182,8 @@ impl Log {
         log.len = base0;
 
         for (base, path) in &found {
-            let mut reader = BufReader::new(File::open(path)?);
-            let mut pos: u64 = 0;
-            let mut line = String::new();
+            // A cursor, not `FramedLogReader::replay`: replay skips seq 0.
+            let mut cursor = FramedLogCursor::open(path).map_err(io_err)?;
             let mut seg = Segment {
                 base_seq: *base,
                 path: path.clone(),
@@ -162,27 +191,29 @@ impl Log {
                 last_ts: Utc::now(),
             };
             loop {
-                line.clear();
-                let n = reader.read_line(&mut line)?;
-                if n == 0 {
+                let pos = cursor.byte_offset();
+                let Some(frame) = cursor.next_frame().map_err(io_err)? else {
+                    // End of file, or a torn tail ending at the last complete frame.
                     break;
+                };
+                let entry: LogEntry = serde_json::from_slice(&frame.payload)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                let seq = log.len;
+                if frame.seq != seq {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("frame seq mismatch in {}", path.display()),
+                    ));
                 }
-                let raw = line.trim_end();
-                if !raw.is_empty() {
-                    let entry: LogEntry = serde_json::from_str(raw)
-                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                    let seq = log.len;
-                    if is_indexed(seq, *base) {
-                        log.index.push((seq, pos));
-                    }
-                    seg.last_ts = entry.appended_at;
-                    log.dedupe_insert(entry.message_id.clone(), seq);
-                    log.ring_push(entry, true);
-                    log.len += 1;
+                if is_indexed(seq, *base) {
+                    log.index.push((seq, pos));
                 }
-                pos += n as u64;
+                seg.last_ts = entry.appended_at;
+                log.dedupe_insert(entry.message_id.clone(), seq);
+                log.ring_push(entry, true);
+                log.len += 1;
             }
-            seg.bytes = pos;
+            seg.bytes = cursor.byte_offset();
             log.segments.push(seg);
         }
         log.start_seq = log.segments.first().map(|s| s.base_seq).unwrap_or(0);
@@ -194,14 +225,15 @@ impl Log {
         } else {
             let active = log.segments.last().unwrap();
             log.active_bytes = active.bytes;
-            log.writer = Some(open_append(&active.path)?);
+            // Opening the writer truncates a torn tail after the last good frame.
+            log.writer = Some(open_writer(&active.path, log.fsync)?);
         }
         Ok(log)
     }
 
     fn segment_path(&self, base: Seq) -> PathBuf {
         self.dir.as_ref().unwrap().join(format!(
-            "{}__shard{}__{}.ndjson",
+            "{}__shard{}__{}.frames",
             sanitize(&self.subject),
             self.shard,
             base
@@ -211,11 +243,10 @@ impl Log {
     /// Close the active segment (if any) and open a fresh one at `base`.
     fn start_new_segment(&mut self, base: Seq) -> io::Result<()> {
         if let Some(w) = self.writer.as_mut() {
-            w.flush()?;
-            w.get_ref().sync_all()?;
+            w.sync().map_err(io_err)?;
         }
         let path = self.segment_path(base);
-        self.writer = Some(open_append(&path)?);
+        self.writer = Some(open_writer(&path, self.fsync)?);
         self.active_bytes = 0;
         self.segments.push(Segment {
             base_seq: base,
@@ -262,8 +293,7 @@ impl Log {
         }
 
         if let Some(mut writer) = self.writer.take() {
-            writer.flush()?;
-            writer.get_ref().sync_all()?;
+            writer.sync().map_err(io_err)?;
         }
         for segment in self.segments.drain(..) {
             match std::fs::remove_file(&segment.path) {
@@ -392,22 +422,23 @@ impl Log {
             // anchor guarantees one exists in this seq's own segment.
             let ip = self.index.partition_point(|&(s, _)| s <= seq) - 1;
             let (idx_seq, idx_off) = self.index[ip];
-            let mut reader = BufReader::new(File::open(&self.segments[si].path)?);
-            reader.seek(SeekFrom::Start(idx_off))?;
-            let mut line = String::new();
-            // Scan forward from the indexed point to `seq`.
+            // A cursor per read: it pins the file length at open. `reread_frame_at`
+            // does not move the cursor, so the frame offset is tracked here.
+            let mut cursor = FramedLogCursor::open(&self.segments[si].path).map_err(io_err)?;
+            let mut off = idx_off;
+            // Walk forward from the indexed point to `seq`.
             for _ in idx_seq..seq {
-                line.clear();
-                if reader.read_line(&mut line)? == 0 {
+                let Some(frame) = cursor.reread_frame_at(off).map_err(io_err)? else {
                     break;
-                }
+                };
+                off += FRAME_HEADER_BYTES + frame.payload.len() as u64;
             }
             for _ in seq..run_end {
-                line.clear();
-                if reader.read_line(&mut line)? == 0 {
+                let Some(frame) = cursor.reread_frame_at(off).map_err(io_err)? else {
                     break;
-                }
-                let entry: LogEntry = serde_json::from_str(line.trim_end())
+                };
+                off += FRAME_HEADER_BYTES + frame.payload.len() as u64;
+                let entry: LogEntry = serde_json::from_slice(&frame.payload)
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                 out.push(entry);
             }
@@ -426,15 +457,14 @@ impl Log {
         Ok(())
     }
 
-    /// Write one entry's line to the active segment, recording its in-segment offset.
-    fn write_line(&mut self, entry: &LogEntry) -> io::Result<()> {
+    /// Write one entry as a frame to the active segment, recording its in-segment offset.
+    fn write_frame(&mut self, entry: &LogEntry) -> io::Result<()> {
         let offset = self.active_bytes;
         if let Some(writer) = self.writer.as_mut() {
-            let line = serde_json::to_string(entry)
+            let payload = serde_json::to_vec(entry)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            writer.write_all(line.as_bytes())?;
-            writer.write_all(b"\n")?;
-            self.active_bytes += line.len() as u64 + 1;
+            writer.append(entry.seq, &payload).map_err(io_err)?;
+            self.active_bytes += FRAME_HEADER_BYTES + payload.len() as u64;
             if let Some(seg) = self.segments.last_mut() {
                 seg.bytes = self.active_bytes;
                 seg.last_ts = entry.appended_at;
@@ -449,8 +479,7 @@ impl Log {
 
     fn fsync_active(&mut self) -> io::Result<()> {
         if let Some(writer) = self.writer.as_mut() {
-            writer.flush()?;
-            writer.get_ref().sync_all()?;
+            writer.sync().map_err(io_err)?;
         }
         Ok(())
     }
@@ -535,12 +564,13 @@ impl Log {
             not_before,
             priority,
         };
-        self.write_line(&entry)?;
+        self.write_frame(&entry)?;
         match self.fsync {
-            FsyncPolicy::Always => self.fsync_active()?,
+            // Core syncs inside `append` under `Always`: nothing more to do.
+            FsyncPolicy::Always => {}
             FsyncPolicy::Interval => {
                 if let Some(w) = self.writer.as_mut() {
-                    w.flush()?;
+                    w.flush().map_err(io_err)?;
                 }
             }
             FsyncPolicy::Os => {}
@@ -584,7 +614,7 @@ impl Log {
                 not_before: None,
                 priority,
             };
-            self.write_line(&entry)?;
+            self.write_frame(&entry)?;
             self.dedupe_insert(message_id, seq);
             self.ring_push(entry, disk);
             self.len += 1;
@@ -621,9 +651,7 @@ impl Log {
     }
 }
 
-fn open_append(path: &PathBuf) -> io::Result<BufWriter<File>> {
-    Ok(BufWriter::new(
-        OpenOptions::new().create(true).append(true).open(path)?,
-    ))
+fn open_writer(path: &PathBuf, policy: FsyncPolicy) -> io::Result<FramedLogWriter> {
+    FramedLogWriter::open(path, core_policy(policy)).map_err(io_err)
 }
 // HANDWRITE-END

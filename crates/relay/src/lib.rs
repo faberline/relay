@@ -38,7 +38,7 @@
 //! work-queue core, [`replication`] is raft HA and lease reconciliation,
 //! [`access`] is bearer auth, [`queue`] is the HTTP/h2c + OpenAPI surface, and
 //! [`shared_kernel`] holds the shared data model and config. [`tls`] holds the
-//! rustls provider and peer-mTLS adapter.
+//! rustls provider and the peer-mTLS env prefix.
 
 pub use relay_access as access;
 pub use relay_broker as broker;
