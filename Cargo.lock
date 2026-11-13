@@ -4323,6 +4323,7 @@ dependencies = [
  "relay-storage",
  "reqwest",
  "rustls 0.23.40",
+ "rustls-pemfile",
  "schemars",
  "serde",
  "serde_json",
