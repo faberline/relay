@@ -29,11 +29,14 @@ Such a change needs a migration note in this file and a new major version.
 
 ## On-disk log format today
 
-The log is stored as newline-delimited JSON (NDJSON) segments.
+The log is stored as core `storage-durable` framed-log segments (since
+2026-11-11; the format change is described in
+[log-format-break.md](log-format-break.md)).
 
-- One file per segment. The file name is `<subject>__shard<N>__<base_seq>.ndjson`
+- One file per segment. The file name is `<subject>__shard<N>__<base_seq>.frames`
   (`Log::segment_path` in `crates/relay-storage/src/log.rs`).
-- One JSON object per line. Each line is a `LogEntry`
+- One frame per entry, behind a 16-byte header (seq, length, CRC32). The
+  payload is one JSON object, a `LogEntry`
   (`crates/relay-shared-kernel/src/types.rs`) with these nine fields: `seq`,
   `message_id`, `subject`, `shard`, `payload`, `headers`, `appended_at`,
   `not_before`, `priority`. The fields `headers`, `not_before` and `priority`
@@ -41,9 +44,10 @@ The log is stored as newline-delimited JSON (NDJSON) segments.
 - The active segment rolls at `segment_bytes`. Retention is delete-on-ack: a
   segment is removed only after every entry in it is acknowledged.
 
-Issue #129 may replace this format with core `storage-durable` frames. If it
-does, the migration decision is made in #129 and recorded in this file before
-that release ships.
+Old `.ndjson` data is not migrated. A data directory that still holds `.ndjson`
+segments fails to open with a clear error, and relay neither reads nor deletes
+those files. See [log-format-break.md](log-format-break.md) for the operator
+steps.
 
 ## Rolling upgrade order
 

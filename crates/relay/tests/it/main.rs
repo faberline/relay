@@ -20,6 +20,7 @@ mod efficiency_relay_competitor_performance_measured_durable_lifecycle;
 mod http2_transport;
 mod http_security_observability;
 mod kind_deployment_layers;
+mod log_format;
 mod measured_performance;
 mod multi_shard;
 mod operator;

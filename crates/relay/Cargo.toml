@@ -125,6 +125,8 @@ backup = [
 otel = ["service-http/otlp"]
 
 [dev-dependencies]
+# Frame-format assertions in tests/it/log_format.rs.
+storage-durable.workspace = true
 # Deploy-CLI render round-trip assertions (tests/it/deploy_cli.rs, tests/it/operator.rs).
 serde_yaml.workspace = true
 tempfile.workspace = true
