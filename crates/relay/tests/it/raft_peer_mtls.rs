@@ -29,7 +29,7 @@ fn authority() -> Authority {
 
 struct Material {
     _dir: tempfile::TempDir,
-    config: relay::tls::peer::PeerTlsConfig,
+    config: peer_tls::PeerTlsConfig,
 }
 
 fn material(ca: &Authority) -> Material {
@@ -58,7 +58,7 @@ fn material_with_trust(identity_ca: &Authority, trust_ca: &Authority) -> Materia
     std::fs::write(&ca_path, trust_ca.cert.pem()).unwrap();
     Material {
         _dir: dir,
-        config: relay::tls::peer::PeerTlsConfig {
+        config: peer_tls::PeerTlsConfig {
             cert: cert_path,
             key: key_path,
             ca: ca_path,
@@ -104,7 +104,7 @@ async fn trusted_relay_peers_replicate_messages_over_mtls() {
             .filter(|(peer, _)| **peer != id as u64)
             .map(|(peer, url)| (*peer, url.clone()))
             .collect();
-        let transport = material.config.peer_transport().unwrap();
+        let transport = raft_runtime::PeerTransport::from_config(&material.config).unwrap();
         let dir = tempfile::tempdir().unwrap();
         let engine = Arc::new(Relay::new(RelayCoreConfig::in_memory()));
         let raft = Arc::new(
@@ -190,8 +190,10 @@ async fn untrusted_relay_peer_certificate_is_rejected() {
     // The attacker trusts Relay's legitimate server identity, so the only
     // failing direction is its own client certificate, signed by another CA.
     let attacker_material = material_with_trust(&attacker_ca, &trusted_ca);
-    let server_transport = server_material.config.peer_transport().unwrap();
-    let attacker_transport = attacker_material.config.peer_transport().unwrap();
+    let server_transport =
+        raft_runtime::PeerTransport::from_config(&server_material.config).unwrap();
+    let attacker_transport =
+        raft_runtime::PeerTransport::from_config(&attacker_material.config).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
 
