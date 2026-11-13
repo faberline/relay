@@ -53,6 +53,10 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny --version 0.19.0
+      - name: Dependency audit
+        run: cargo deny check advisories bans licenses sources
 
   test-workspace:
     name: "test: workspace"
@@ -273,9 +277,9 @@ jobs:
       id-token: write
       contents: read
       packages: read
-    uses: faberline/aw/.github/workflows/gke-test.yml@6eb7ebcdf38343e0d4c77f8674b6bc30976d86bb
+    uses: faberline/aw/.github/workflows/gke-test.yml@efe1a96e54617e60f6e2b7d154aea67fca8c96f8
     with:
-      aw-ref: 6eb7ebcdf38343e0d4c77f8674b6bc30976d86bb
+      aw-ref: efe1a96e54617e60f6e2b7d154aea67fca8c96f8
       image: ${{ needs.e2e-resolve.outputs.image }}
       image-name: ghcr.io/faberline/relay
       namespace: relay

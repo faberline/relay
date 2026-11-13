@@ -928,4 +928,38 @@ async fn real_h2c_raft_cluster_smoke() {
     println!("real h2c raft cluster smoke");
     c.shutdown().await;
 }
+
+/// #135: a rolling restart of all three voters, one at a time on the same data
+/// directories, loses no acked message and keeps the publish order.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rolling_restart_keeps_all_acked_messages() {
+    let _guard = CLUSTER_TEST_LOCK.lock().await;
+    let mut c = Cluster::prepare(3).await;
+    c.start_all(1024);
+    let leader = c.wait_leader().await;
+    for i in 0..20 {
+        let (_, out) = c
+            .raft(leader)
+            .publish(&cmd(&format!("m{i}")))
+            .await
+            .unwrap();
+        assert!(!out.expect("outcome").deduped);
+    }
+    c.wait_converged(20).await;
+    for id in 0..3usize {
+        c.kill(id).await;
+        c.start_node(id, 1024);
+        c.wait_leader().await;
+        c.wait_converged(20).await;
+    }
+    let want: Vec<String> = (0..20).map(|i| format!("m{i}")).collect();
+    for id in 0..3usize {
+        assert_eq!(
+            c.message_ids(id),
+            want,
+            "node {id} holds m0..m19 in order after the rolling restart"
+        );
+    }
+    c.shutdown().await;
+}
 // HANDWRITE-END

@@ -82,9 +82,12 @@ serde_yaml.workspace = true
 # local sink are cheap; only the HTTP fetch path of `relay backup` needs the
 # `backup` feature (reqwest + the lib's s3 sink).
 service-backup.workspace = true
-# Shared peer-mTLS material loading (#1209, lumen #971), called directly
-# with the RELAY_PEER prefix (src/tls.rs PEER_ENV_PREFIX).
+# Shared peer-mTLS material loading (#1209, lumen #971). serve.rs and src/tls.rs
+# call it with the RELAY_PEER prefix.
 peer-tls.workspace = true
+# rustls config types surfaced by the peer_tls builder passthroughs.
+rustls.workspace = true
+rustls-pemfile.workspace = true
 # Shared polyglot OpenAPI client codegen (#1209, keep #777): `relay spec gen`.
 openapi-codegen.workspace = true
 # HTTP client for `relay backup`'s snapshot fetch (feature `backup` only).
