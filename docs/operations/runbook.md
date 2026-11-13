@@ -118,6 +118,4 @@ metric today: use `kubectl` and `/readyz` for those.
   ```
 
 - Expected: `rollout status` reports a complete rollout, one pod at a time, and
-  each pod is `Ready` before the next one restarts. The rolling-upgrade test and
-  the version compatibility policy come with issue #135; until then, do not
-  assume that a new image can read the data of an old one.
+  each pod is `Ready` before the next one restarts. The version compatibility policy is in [upgrade.md](upgrade.md); the rolling-restart test is `raft_cluster::rolling_restart_keeps_all_acked_messages`.
