@@ -397,4 +397,84 @@ fn offline_spec_yaml_and_json_schema_views_match_json() {
         "json-schema view differs from the components of the JSON document"
     );
 }
+/// The ten public endpoints of the data plane and the admin surface, with the
+/// method each handler declares in its `#[utoipa::path]` attribute.
+const PUBLIC_ENDPOINTS: [(&str, &str); 10] = [
+    ("/v1/{subject}/publish", "post"),
+    ("/v1/{subject}/publish-batch", "post"),
+    ("/v1/{subject}/consume", "post"),
+    ("/v1/{subject}/lease", "post"),
+    ("/v1/{subject}/lease-batch", "post"),
+    ("/v1/{subject}/ack", "post"),
+    ("/v1/{subject}/ack-batch", "post"),
+    ("/v1/{subject}/heartbeat", "post"),
+    ("/v1/{subject}/len", "get"),
+    ("/admin/backup", "get"),
+];
+
+/// The sorted key set of a document's `paths` object.
+fn sorted_path_keys(doc: &serde_json::Value) -> Vec<String> {
+    let mut keys: Vec<String> = doc["paths"]
+        .as_object()
+        .expect("document has a paths object")
+        .keys()
+        .cloned()
+        .collect();
+    keys.sort();
+    keys
+}
+
+/// The sorted `paths` of the offline `relay spec` (JSON). Shared with the
+/// served-contract check in `http2_transport.rs`.
+pub(crate) fn relay_spec_paths() -> Vec<String> {
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&["spec"])).expect("`relay spec` emits JSON");
+    sorted_path_keys(&doc)
+}
+
+/// Issue #24 AC1-AC3: `relay spec` lists exactly the ten public endpoints,
+/// the YAML view lists the same set, and each path lists the method its
+/// handler declares. A missing or extra path is named in the failure message.
+#[test]
+fn spec_lists_all_ten_public_endpoints_with_accurate_methods() {
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout(&["spec"])).expect("`relay spec` emits JSON");
+    let yaml: serde_json::Value =
+        serde_yaml::from_str(&stdout(&["spec", "--format", "openapi-yaml"]))
+            .expect("`relay spec --format openapi-yaml` emits YAML");
+
+    let mut expected: Vec<String> = PUBLIC_ENDPOINTS
+        .iter()
+        .map(|(path, _)| path.to_string())
+        .collect();
+    expected.sort();
+    let json_paths = sorted_path_keys(&json);
+    let missing: Vec<&String> = expected
+        .iter()
+        .filter(|p| !json_paths.contains(p))
+        .collect();
+    let extra: Vec<&String> = json_paths
+        .iter()
+        .filter(|p| !expected.contains(p))
+        .collect();
+    assert!(
+        missing.is_empty() && extra.is_empty(),
+        "offline spec paths must be exactly the ten public endpoints; \
+         missing: {missing:?}, extra: {extra:?}"
+    );
+
+    assert_eq!(
+        sorted_path_keys(&yaml),
+        json_paths,
+        "openapi-yaml paths must equal the JSON paths"
+    );
+
+    for (path, method) in PUBLIC_ENDPOINTS {
+        assert!(
+            json["paths"][path].get(method).is_some(),
+            "{path} must declare the `{method}` method"
+        );
+    }
+}
+
 // HANDWRITE-END
