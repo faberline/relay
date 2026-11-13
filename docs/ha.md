@@ -92,9 +92,26 @@ Replica mode loads peer mTLS material via `peer-tls`:
 `RELAY_PEER_TLS_CERT` / `RELAY_PEER_TLS_KEY` / `RELAY_PEER_TLS_CA`
 (+ `RELAY_PEER_MTLS=on` to require client certs). Serve validates the material
 fail-fast at startup — partial config or a mis-pointed path exits nonzero.
+Tested fail-fast validation cases:
+- Missing cert, key, or CA path
+- Partial TLS path configuration
+- Non-PEM certificate, private key, or CA file
+- Mismatched private key and certificate pair
+- Empty CA file
+
 `raft-runtime::PeerTransport` serves `/raft/*` on the dedicated listener with
 mutual identity validation and dials every peer over the same reloadable
 certificate snapshot. Unknown CAs, wrong server identities, expired chains,
 and malformed rotations fail closed before the Raft router. Plain h2c remains
 available only when peer mTLS is explicitly disabled for local development.
+
+## Public API TLS
+
+Set `RELAY_TLS_CERT` and `RELAY_TLS_KEY` to PEM file paths to serve the public
+client API over TLS. The listener offers ALPN `h2` and `http/1.1`. Set both or
+neither: with only one set, `relay` exits at startup with an error that names
+both variables. With neither set, the client listener stays cleartext. The
+probes stay tokenless on the TLS listener. Client mTLS and certificate rotation
+are not part of this version.
+
 <!-- HANDWRITE-END -->

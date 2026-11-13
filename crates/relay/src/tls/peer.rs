@@ -140,6 +140,36 @@ LkjT2UdpFBDZGWHwqDRhXX8k
 -----END PRIVATE KEY-----
 "#;
 
+    const TEST_KEY_2: &str = r#"-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDKu663bq8H7tFK
+KSxS+hhdAv2iri2VG3ZD1IZLk/0ULACRkVkk9tKjQ9/v3PyX29MS81rdhO2/aXoa
+osV5oEp12cI3PenafvOHWHgSY9PSQ77Pk7xDTmhOuGAgxdImY7etvGc+lASTMbPj
+bkTjzx2rbTkTsm5qe+9BipBwrXfMEtepurRwrvxgPbE1Vf+CcWBsKuSqmBDWFp4r
+gF72CqFPj/B3qyeXEcHi1DJSqOTUfSZ6x2fYbzYaGSfQLnoQCVQxwtF60Od9L0kP
+h1sNLQdgVJwN+XEk933opewo72IXWcm85+lW30l/V4FnjeQv8zhwij8s9oxrEMBE
+KCnJC6SzAgMBAAECggEAJQAWBiJsTX1XszpKfaZpdehK1DsH1LPbZMvP6tFKmjjh
+ra+iXm2xydxkbYmejDSxlD7X8aAGKC4e++eDNQx9Kn8gxCZHnPoYhjYuS+TuTuzQ
+UWA8NuiDfwKFgNW54gnHBy1ghnpLT3X9x99jMVSmrJfVl/Oz1TljVEnuzLHMMHFY
+ppy6XC8ZAJfdTipSsEFXgIXfKZfwLKZ3p1zJTEnMnO2th3jwt5uuGVK8cOrThPoC
+063f9WJv66raWwVvkW+NRwwjpmFL2RavufFr9qGXl8Ozg+jM2qeX1JWjWlUsRcP4
+8wn2kOaVvUrjx2VOn10QoZsoDTj/3KWL4VsO5OWOQQKBgQDwQ/XXicmjeVosBL0l
+lXuQx1Dd69MkGENdwHmVU409d4yns3sDW3M4sOB0D3XvJJZDdE2gFiyYp6yIp4+f
+5vD6AAP21/fUUEuonl3rECJzsO1+sGeiaQLt1hAlg82mqqR69V8A4gx3EJgVS1Zl
+YplHWJfTqGceM0Tg2NUycTPhUwKBgQDYAn6ImQs0exXRudcjBok30JHczpV1R4SG
+eS+RQgZe4lgdknWGkUPhKTOtvzOioHAKb0VJaXj4ytK2iIgGKulsApYGGCMPUIjy
+VmI4qSxCn/GQZJq3Wj3V/fbL7qOy7dOezfqb0MRh/APIF/+iJTeGqfvCTGXivi0o
+tHAMIFXjIQKBgQDAGaZDKeC1Or6U+Uj99tGwBRysAvRzJI8gM1dCxGXmImKsZv1Q
+xtqOFiWvxfjGNtuJnUC/YVtQxqdVL5vO/ofnawHAaBa3g2eqrsxquCDDnU+V/pct
+rIZyALgyNnrD6iXORccq3pGW1Qaz5+Nw9m+VMslZqoigBd/pYpS7WvVfDwKBgA3+
+q2ACOl2eE93QooWcaMt68dhSchB1H7ruowxQMMV4+KiB0qdzReiSmMyK9Ld2mYuz
+hdOpx7KmwVweIGH16cWbrUiby7m0SAsbWaW+ICX44teuDPAQIq14lMLFpUl0ax+A
+zNnHftGyWDRgialhq+VHog4GkRtNovNeLVw7xBTBAoGAPOwRKi49i+lKTukBQrzD
+O0vtnyMxsD7qWkBf7ixh5wfEq7taAaOOCuj/u4CUjSeAfxBhqtu3odIewcJO7UQf
+AS+BkvI1DrHg7OEca6RPI+zaSHmmPMonMzeeqWs0NSBMnalXIJ0THdEzDeoUfqqT
+hL1jkBLctkVegPUy9dOXVF0=
+-----END PRIVATE KEY-----
+"#;
+
     const ENV_KEYS: [&str; 4] = [
         "RELAY_PEER_TLS_CERT",
         "RELAY_PEER_TLS_KEY",
@@ -184,10 +214,13 @@ LkjT2UdpFBDZGWHwqDRhXX8k
                 .contains("must all be set together")),
             "missing" => {
                 let expected = std::env::var("RELAY_PEER_TLS_EXPECTED_PATH").unwrap();
-                assert!(PeerTlsConfig::from_env()
-                    .unwrap_err()
-                    .to_string()
-                    .contains(&expected));
+                let err = PeerTlsConfig::from_env().unwrap_err().to_string();
+                assert!(!err.is_empty(), "error message must be non-empty");
+                assert!(
+                    !err.contains("PRIVATE KEY"),
+                    "error message must be credential-free"
+                );
+                assert!(err.contains(&expected));
             }
             other => panic!("unknown peer TLS env scenario {other}"),
         }
@@ -279,6 +312,110 @@ LkjT2UdpFBDZGWHwqDRhXX8k
             .expect("server config should build");
         cfg.rustls_client_config()
             .expect("client config should build");
+        std::fs::remove_dir_all(cfg.cert.parent().unwrap()).ok();
+    }
+
+    fn assert_credential_free_err<T: std::fmt::Debug>(res: Result<T>) {
+        let err = res.expect_err("expected error");
+        let msg = format!("{err:#}");
+        assert!(!msg.is_empty(), "error message must be non-empty");
+        assert!(
+            !msg.contains("PRIVATE KEY"),
+            "error message must not contain PRIVATE KEY"
+        );
+        assert!(
+            !msg.contains(TEST_KEY.trim()),
+            "error message must not contain private key material"
+        );
+    }
+
+    #[test]
+    fn mis_pointed_key_path_fails_fast_naming_the_path() {
+        let dir =
+            std::env::temp_dir().join(format!("relay-peer-tls-miss-key-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("cert.pem"), b"DUMMY").unwrap();
+        std::fs::write(dir.join("ca.pem"), b"DUMMY").unwrap();
+        run_env_case(
+            "missing",
+            vec![
+                ("RELAY_PEER_TLS_CERT", dir.join("cert.pem").into_os_string()),
+                (
+                    "RELAY_PEER_TLS_KEY",
+                    dir.join("missing-key.pem").into_os_string(),
+                ),
+                ("RELAY_PEER_TLS_CA", dir.join("ca.pem").into_os_string()),
+                ("RELAY_PEER_MTLS", "on".into()),
+                ("RELAY_PEER_TLS_EXPECTED_PATH", "missing-key.pem".into()),
+            ],
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn mis_pointed_ca_path_fails_fast_naming_the_path() {
+        let dir =
+            std::env::temp_dir().join(format!("relay-peer-tls-miss-ca-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("cert.pem"), b"DUMMY").unwrap();
+        std::fs::write(dir.join("key.pem"), b"DUMMY").unwrap();
+        run_env_case(
+            "missing",
+            vec![
+                ("RELAY_PEER_TLS_CERT", dir.join("cert.pem").into_os_string()),
+                ("RELAY_PEER_TLS_KEY", dir.join("key.pem").into_os_string()),
+                (
+                    "RELAY_PEER_TLS_CA",
+                    dir.join("missing-ca.pem").into_os_string(),
+                ),
+                ("RELAY_PEER_MTLS", "on".into()),
+                ("RELAY_PEER_TLS_EXPECTED_PATH", "missing-ca.pem".into()),
+            ],
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn non_pem_cert_file_fails_rustls_configs() {
+        let cfg = write_tls_fixture("bad-cert");
+        std::fs::write(&cfg.cert, b"NOT_A_PEM_CERT").unwrap();
+        assert_credential_free_err(cfg.rustls_server_config());
+        assert_credential_free_err(cfg.rustls_client_config());
+        std::fs::remove_dir_all(cfg.cert.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn non_pem_key_file_fails_rustls_configs() {
+        let cfg = write_tls_fixture("bad-key");
+        std::fs::write(&cfg.key, b"NOT_A_PEM_KEY").unwrap();
+        assert_credential_free_err(cfg.rustls_server_config());
+        assert_credential_free_err(cfg.rustls_client_config());
+        std::fs::remove_dir_all(cfg.cert.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn non_pem_ca_file_fails_rustls_configs() {
+        let cfg = write_tls_fixture("bad-ca");
+        std::fs::write(&cfg.ca, b"NOT_A_PEM_CA").unwrap();
+        assert_credential_free_err(cfg.rustls_server_config());
+        assert_credential_free_err(cfg.rustls_client_config());
+        std::fs::remove_dir_all(cfg.cert.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn mismatched_key_returns_err_from_rustls_server_config() {
+        let cfg = write_tls_fixture("mismatched-key");
+        std::fs::write(&cfg.key, TEST_KEY_2).unwrap();
+        assert_credential_free_err(cfg.rustls_server_config());
+        std::fs::remove_dir_all(cfg.cert.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn empty_ca_file_returns_err() {
+        let cfg = write_tls_fixture("empty-ca");
+        std::fs::write(&cfg.ca, b"").unwrap();
+        assert_credential_free_err(cfg.rustls_server_config());
+        assert_credential_free_err(cfg.rustls_client_config());
         std::fs::remove_dir_all(cfg.cert.parent().unwrap()).ok();
     }
 }
