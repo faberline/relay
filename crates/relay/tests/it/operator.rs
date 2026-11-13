@@ -684,4 +684,80 @@ fn relayspec_crd_operator_instance_render() {
         "template profile carries placeholder values and must not parse into Relay"
     );
 }
+
+/// The operator ClusterRole (`k8s/operator/rbac.yaml`) covers every kind that
+/// `render()` can emit, the backup CronJob included, and uses no wildcard.
+#[test]
+fn operator_cluster_role_covers_every_rendered_kind() {
+    let mut with_backup = spec(3);
+    with_backup.backup = Some(relay::operator::crd::RelayBackupSpec {
+        policy: service_backup::ScheduledBackupPolicy {
+            schedule: "0 3 * * *".into(),
+            destination: "s3://relay-backups/prod".into(),
+            retention_secs: Some(604_800),
+        },
+        admin_token_secret: Some("relay-backup-token".into()),
+    });
+    let mut cr = Relay::new("relay", with_backup);
+    cr.metadata.namespace = Some("production".into());
+    let objs = render(&cr);
+    assert!(
+        objs.iter().any(|o| o["kind"] == "CronJob"),
+        "render must emit the backup CronJob"
+    );
+
+    // rbac.yaml holds several YAML documents; split them and find the ClusterRole.
+    let rbac = include_str!("../../../../k8s/operator/rbac.yaml");
+    let role: Value = rbac
+        .split("\n---")
+        .map(|doc| serde_yaml::from_str::<Value>(doc).expect("rbac.yaml document"))
+        .find(|doc| doc["kind"] == "ClusterRole")
+        .expect("ClusterRole in rbac.yaml");
+    let rules = role["rules"].as_array().expect("ClusterRole rules");
+
+    for rule in rules {
+        for field in ["apiGroups", "resources", "verbs"] {
+            let values = rule[field].as_array().expect("rule list");
+            assert!(
+                values.iter().all(|v| v.as_str() != Some("*")),
+                "ClusterRole rule {rule} uses a wildcard in {field}"
+            );
+        }
+    }
+
+    fn resource_of(kind: &str) -> &'static str {
+        match kind {
+            "ServiceAccount" => "serviceaccounts",
+            "StatefulSet" => "statefulsets",
+            "Service" => "services",
+            "PodDisruptionBudget" => "poddisruptionbudgets",
+            "CronJob" => "cronjobs",
+            other => panic!("render emits {other}: add its resource to this table"),
+        }
+    }
+
+    const VERBS: [&str; 7] = [
+        "get", "list", "watch", "create", "update", "patch", "delete",
+    ];
+    for obj in &objs {
+        let kind = obj["kind"].as_str().expect("rendered kind");
+        let api_version = obj["apiVersion"].as_str().expect("rendered apiVersion");
+        let group = api_version.split_once('/').map_or("", |(g, _)| g);
+        let resource = resource_of(kind);
+        let has = |rule: &Value, field: &str, want: &str| {
+            rule[field]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(want)))
+        };
+        let covered = rules.iter().any(|rule| {
+            has(rule, "apiGroups", group)
+                && has(rule, "resources", resource)
+                && VERBS.iter().all(|verb| has(rule, "verbs", verb))
+        });
+        assert!(
+            covered,
+            "ClusterRole lacks {group:?}/{resource} for rendered {kind}"
+        );
+    }
+}
 // HANDWRITE-END

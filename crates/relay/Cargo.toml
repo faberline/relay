@@ -100,7 +100,7 @@ build-stamp.workspace = true
 [features]
 default = []
 # self-update / issue — enable the online (HTTPS) paths of the shared CLI-ops
-# lib. Release builds enable them.
+# lib. Off by default; the release candidate build does not enable them.
 self-update = ["cli-std/online"]
 issue = ["cli-std/online"]
 # operator — the relay-operator crate: a RelaySpec CRD + ManagedService render,
