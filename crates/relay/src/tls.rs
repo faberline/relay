@@ -17,10 +17,11 @@
 //! rustls unconditionally, so a conditional install would only leave a
 //! panic-shaped hole in the default build.
 //!
-//! [`peer`] is relay's thin adapter over the shared peer-mTLS material loader.
-
-pub mod peer;
 pub mod public;
+
+/// Env prefix of the peer-mTLS material: `peer_tls::PeerTlsConfig::from_env`
+/// reads `<prefix>_TLS_CERT`, `<prefix>_TLS_KEY`, `<prefix>_TLS_CA` and `<prefix>_MTLS`.
+pub const PEER_ENV_PREFIX: &str = "RELAY_PEER";
 
 /// Install the aws-lc-rs rustls crypto provider as the process default, once.
 ///
@@ -29,5 +30,16 @@ pub mod public;
 /// `core/peer-tls` install (#1209).
 pub fn install_default_crypto_provider() {
     peer_tls::install_default_crypto_provider();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PEER_ENV_PREFIX;
+
+    #[test]
+    fn peer_env_prefix_keeps_the_relay_contract() {
+        assert_eq!(PEER_ENV_PREFIX, "RELAY_PEER");
+        assert_eq!(format!("{PEER_ENV_PREFIX}_TLS_CERT"), "RELAY_PEER_TLS_CERT");
+    }
 }
 // HANDWRITE-END

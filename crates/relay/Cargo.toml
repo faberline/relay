@@ -82,8 +82,8 @@ serde_yaml.workspace = true
 # local sink are cheap; only the HTTP fetch path of `relay backup` needs the
 # `backup` feature (reqwest + the lib's s3 sink).
 service-backup.workspace = true
-# Shared peer-mTLS material loading (#1209, lumen #971). src/tls/peer.rs is
-# the thin RELAY_PEER-prefix adapter.
+# Shared peer-mTLS material loading (#1209, lumen #971). The RELAY_PEER env
+# prefix is `relay::tls::PEER_ENV_PREFIX`.
 peer-tls.workspace = true
 # rustls config types surfaced by the peer_tls builder passthroughs.
 rustls.workspace = true
