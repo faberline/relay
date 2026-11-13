@@ -53,6 +53,10 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny --version 0.19.0
+      - name: Dependency audit
+        run: cargo deny check advisories bans licenses sources
 
   test-workspace:
     name: "test: workspace"
