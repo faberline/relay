@@ -82,8 +82,8 @@ serde_yaml.workspace = true
 # local sink are cheap; only the HTTP fetch path of `relay backup` needs the
 # `backup` feature (reqwest + the lib's s3 sink).
 service-backup.workspace = true
-# Shared peer-mTLS material loading (#1209, lumen #971). src/tls/peer.rs is
-# the thin RELAY_PEER-prefix adapter.
+# Shared peer-mTLS material loading (#1209, lumen #971). serve.rs and src/tls.rs
+# call it with the RELAY_PEER prefix.
 peer-tls.workspace = true
 # rustls config types surfaced by the peer_tls builder passthroughs.
 rustls.workspace = true
@@ -100,7 +100,7 @@ build-stamp.workspace = true
 [features]
 default = []
 # self-update / issue — enable the online (HTTPS) paths of the shared CLI-ops
-# lib. Release builds enable them.
+# lib. Off by default; the release candidate build does not enable them.
 self-update = ["cli-std/online"]
 issue = ["cli-std/online"]
 # operator — the relay-operator crate: a RelaySpec CRD + ManagedService render,
