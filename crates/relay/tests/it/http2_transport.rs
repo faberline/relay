@@ -37,6 +37,21 @@ async fn start_server() -> (SocketAddr, AppState) {
     (addr, state)
 }
 
+/// Like `start_server`, but the serve loop stops when `shutdown` completes,
+/// and the serve task is returned so a test can wait for it to end.
+async fn start_server_with_shutdown(
+    shutdown: tokio::sync::oneshot::Receiver<()>,
+) -> (SocketAddr, AppState, tokio::task::JoinHandle<()>) {
+    let state = AppState::new(RelayServerConfig::ephemeral(), 8 * 1024 * 1024);
+    let app = router(state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let serve = tokio::spawn(service_http::serve(listener, app, async move {
+        let _ = shutdown.await;
+    }));
+    (addr, state, serve)
+}
+
 fn h2c_client() -> reqwest::Client {
     reqwest::Client::builder()
         .http2_prior_knowledge()
@@ -372,6 +387,65 @@ async fn drain_flips_readyz_and_keeps_serving() {
         ack_body.committed_seq,
         Some(0),
         "/v1/{subject}/ack after drain: expected committed_seq Some(0)"
+    );
+}
+
+/// Issue #16: close capability claim `graceful-drain-readiness` (graceful drain readiness).
+/// The serve loop must return once its shutdown future completes, and then
+/// refuse new connections. Until then `/readyz` stays 503 while `/healthz` is 200.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn graceful_drain_readiness_serve_returns_after_shutdown() {
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let (addr, state, serve) = start_server_with_shutdown(rx).await;
+    let client = h2c_client();
+
+    let ready_before = client.get(url(addr, "/readyz")).send().await.unwrap();
+    assert_eq!(
+        ready_before.status(),
+        200,
+        "graceful drain readiness: /readyz before drain: expected status 200"
+    );
+    let health_before = client.get(url(addr, "/healthz")).send().await.unwrap();
+    assert_eq!(
+        health_before.status(),
+        200,
+        "graceful drain readiness: /healthz before drain: expected status 200"
+    );
+
+    state.start_drain();
+
+    let ready_after = client.get(url(addr, "/readyz")).send().await.unwrap();
+    assert_eq!(
+        ready_after.status(),
+        503,
+        "graceful drain readiness: /readyz after drain: expected status 503"
+    );
+    assert_eq!(
+        ready_after.text().await.unwrap(),
+        "draining",
+        "graceful drain readiness: /readyz after drain: expected body draining"
+    );
+    let health_after = client.get(url(addr, "/healthz")).send().await.unwrap();
+    assert_eq!(
+        health_after.status(),
+        200,
+        "graceful drain readiness: /healthz after drain: expected status 200"
+    );
+
+    drop(client);
+    tx.send(())
+        .expect("graceful drain readiness: shutdown receiver must still be alive");
+    let joined = tokio::time::timeout(std::time::Duration::from_secs(10), serve).await;
+    assert!(
+        joined.is_ok(),
+        "graceful drain readiness: serve loop must return within 10 s of shutdown"
+    );
+    joined
+        .unwrap()
+        .expect("graceful drain readiness: serve task must not panic");
+    assert!(
+        tokio::net::TcpStream::connect(addr).await.is_err(),
+        "graceful drain readiness: a new connection must be refused after serve returns"
     );
 }
 
@@ -930,6 +1004,33 @@ async fn consume_stream_delivers_and_acks_over_h2c() {
     assert!(
         lease_check.lease.is_none(),
         "acked entry must not be leased again"
+    );
+}
+
+/// Issue #24 AC4: the served `/openapi.json` lists exactly the paths that the
+/// offline `relay spec` lists.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn served_openapi_paths_match_offline_spec() {
+    let (addr, _state) = start_server().await;
+    let resp = reqwest::Client::new()
+        .get(url(addr, "/openapi.json"))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "GET /openapi.json must succeed");
+    let served: serde_json::Value = resp.json().await.unwrap();
+    let mut served_paths: Vec<String> = served["paths"]
+        .as_object()
+        .expect("served document has paths")
+        .keys()
+        .cloned()
+        .collect();
+    served_paths.sort();
+
+    assert_eq!(
+        served_paths,
+        crate::spec_cli::relay_spec_paths(),
+        "served /openapi.json paths must equal the offline `relay spec` paths"
     );
 }
 
