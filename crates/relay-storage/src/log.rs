@@ -196,10 +196,10 @@ impl Log {
                     // End of file, or a torn tail ending at the last complete frame.
                     break;
                 };
-                let entry: LogEntry = serde_json::from_slice(&frame.payload)
+                let entry: LogEntry = serde_json::from_slice(frame.payload())
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                 let seq = log.len;
-                if frame.seq != seq {
+                if frame.seq() != seq {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("frame seq mismatch in {}", path.display()),
@@ -428,17 +428,17 @@ impl Log {
             let mut off = idx_off;
             // Walk forward from the indexed point to `seq`.
             for _ in idx_seq..seq {
-                let Some(frame) = cursor.reread_frame_at(off).map_err(io_err)? else {
+                let Some(frame) = cursor.reread_large_mapped_frame_at(off).map_err(io_err)? else {
                     break;
                 };
-                off += FRAME_HEADER_BYTES + frame.payload.len() as u64;
+                off += FRAME_HEADER_BYTES + frame.payload().len() as u64;
             }
             for _ in seq..run_end {
-                let Some(frame) = cursor.reread_frame_at(off).map_err(io_err)? else {
+                let Some(frame) = cursor.reread_large_mapped_frame_at(off).map_err(io_err)? else {
                     break;
                 };
-                off += FRAME_HEADER_BYTES + frame.payload.len() as u64;
-                let entry: LogEntry = serde_json::from_slice(&frame.payload)
+                off += FRAME_HEADER_BYTES + frame.payload().len() as u64;
+                let entry: LogEntry = serde_json::from_slice(frame.payload())
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                 out.push(entry);
             }

@@ -15,7 +15,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
 use chrono::{DateTime, Duration, Utc};
-use raft_runtime::{FenceToken, FencedAssignment};
+use raft_runtime::{AssignmentEpoch, FenceToken, FencedAssignment, NodeId};
 use serde::{Deserialize, Serialize};
 
 use relay_shared_kernel::types::{CommittedOffset, Lease, Seq, ShardId};
@@ -242,9 +242,9 @@ impl WorkQueue {
         let expires_at = now + Duration::milliseconds(self.lease_ttl_ms as i64);
         let assignment = self.assignments.entry(seq).or_default();
         let token = assignment
-            .assign(executor_node, millis(now), millis(expires_at))
+            .assign(NodeId::new(executor_node), millis(now), millis(expires_at))
             .expect("pickable seq must have no active executor assignment");
-        let epoch = token.epoch;
+        let epoch = token.epoch.get();
 
         let lease_id = format!("{}#{}:{}:e{}", self.subject, self.shard, seq, epoch);
         let lease = Lease {
@@ -329,8 +329,8 @@ impl WorkQueue {
             if let Some(assignment) = self.assignments.get_mut(&seq) {
                 let _ = assignment.release(
                     FenceToken {
-                        owner: lease.executor_node,
-                        epoch: lease.epoch,
+                        owner: NodeId::new(lease.executor_node),
+                        epoch: AssignmentEpoch::new(lease.epoch),
                     },
                     millis(lease.granted_at),
                 );
@@ -409,8 +409,8 @@ impl WorkQueue {
             return false;
         };
         let token = FenceToken {
-            owner: executor_node,
-            epoch,
+            owner: NodeId::new(executor_node),
+            epoch: AssignmentEpoch::new(epoch),
         };
         let Some(assignment) = self.assignments.get_mut(&seq) else {
             return false;
@@ -459,8 +459,8 @@ impl WorkQueue {
         if assignment
             .release(
                 FenceToken {
-                    owner: executor_node,
-                    epoch,
+                    owner: NodeId::new(executor_node),
+                    epoch: AssignmentEpoch::new(epoch),
                 },
                 millis(now),
             )
@@ -521,8 +521,8 @@ impl WorkQueue {
         assignment
             .renew(
                 FenceToken {
-                    owner: executor_node,
-                    epoch,
+                    owner: NodeId::new(executor_node),
+                    epoch: AssignmentEpoch::new(epoch),
                 },
                 millis(now),
                 expires_at_ms,
