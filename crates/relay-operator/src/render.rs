@@ -63,15 +63,21 @@ fn owner_ref(relay: &Relay) -> Option<Value> {
 
 /// relay's render identity for the shared [`service_k8s::render`] helpers.
 fn ctx<'a>(relay: &Relay, name: &'a str, ns: &'a str) -> RenderCtx<'a> {
-    RenderCtx {
-        app: APP,
-        manager: MANAGER,
-        api_version: API_VERSION,
-        kind: KIND,
-        name,
-        ns,
-        owner: owner_ref(relay),
+    RenderCtx::new(APP, MANAGER, API_VERSION, KIND, name, ns).with_owner(owner_ref(relay))
+}
+
+/// Checks what the StatefulSet render cannot express as an error: `render`
+/// returns plain objects, so the operator calls this first and does not
+/// render a spec that fails it (see `reconcile_plan`). The render itself
+/// needs at least one replica and a non-empty name.
+pub fn validate(relay: &Relay) -> Result<(), String> {
+    if relay.spec.cluster.replicas_per_shard == 0 {
+        return Err("spec.replicasPerShard must be at least 1".to_string());
     }
+    if instance(relay).trim().is_empty() {
+        return Err("metadata.name must not be empty".to_string());
+    }
+    Ok(())
 }
 
 /// Which Secret (if any) supplies the token registry file: only when the CR
@@ -126,12 +132,13 @@ pub fn render(relay: &Relay) -> Vec<Value> {
 /// stays manifest-only (lumen #808).
 fn backup_cron_job(relay: &Relay, cx: &RenderCtx<'_>) -> Option<Value> {
     let policy = relay.spec.backup.as_ref()?;
-    let cron_name = format!("{}-backup", cx.name);
+    let cron_name = format!("{}-backup", cx.name());
     // Cluster-DNS FQDN of the client ClusterIP Service, reachable from any
     // namespace's CronJob pod regardless of DNS search suffixes.
     let url = format!(
         "http://{}.{}.svc.cluster.local:{CLIENT_PORT}",
-        cx.name, cx.ns
+        cx.name(),
+        cx.ns()
     );
     let mut args = vec![
         "backup".to_string(),
@@ -170,7 +177,7 @@ fn backup_cron_job(relay: &Relay, cx: &RenderCtx<'_>) -> Option<Value> {
         env_from: vec![],
         volumes: vec![],
         volume_mounts: vec![],
-        service_account_name: Some(cx.name),
+        service_account_name: Some(cx.name()),
         cpu: "100m",
         memory: "128Mi",
         successful_jobs_history_limit: 3,
@@ -224,7 +231,7 @@ fn statefulset(relay: &Relay, cx: &RenderCtx, headless: &str) -> Value {
 
     let mut sts = render::sharded_statefulset(ShardedStatefulSet {
         cx,
-        name: cx.name,
+        name: cx.name(),
         component: COMPONENT,
         image: s.cluster.image.as_str(),
         image_pull_policy: s
@@ -246,7 +253,8 @@ fn statefulset(relay: &Relay, cx: &RenderCtx, headless: &str) -> Value {
         memory,
         extra_env,
         volume_claim: Some(pvc),
-    });
+    })
+    .expect("validate() rejects replicasPerShard 0 and an empty name before render");
     harden(relay, &mut sts);
     sts
 }
@@ -351,3 +359,40 @@ fn harden(relay: &Relay, sts: &mut Value) {
     }
 }
 // HANDWRITE-END
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn relay(name: &str, replicas_per_shard: u32) -> Relay {
+        serde_json::from_value(json!({
+            "apiVersion": "relay.dev/v1alpha1",
+            "kind": "Relay",
+            "metadata": { "name": name, "namespace": "default", "uid": "uid-1" },
+            "spec": { "image": "relay:test", "replicasPerShard": replicas_per_shard },
+        }))
+        .expect("valid Relay CR")
+    }
+
+    #[test]
+    fn zero_replicas_per_shard_is_rejected_before_render() {
+        let err = validate(&relay("relay", 0)).expect_err("replicasPerShard 0 must be rejected");
+        assert!(err.contains("replicasPerShard"), "{err}");
+    }
+
+    #[test]
+    fn empty_name_is_rejected_before_render() {
+        let err = validate(&relay("  ", 1)).expect_err("an empty name must be rejected");
+        assert!(err.contains("metadata.name"), "{err}");
+    }
+
+    #[test]
+    fn valid_spec_renders_the_statefulset_with_its_replicas() {
+        assert!(validate(&relay("relay", 3)).is_ok());
+        let sts = render(&relay("relay", 3))
+            .into_iter()
+            .find(|object| object["kind"] == "StatefulSet")
+            .expect("a StatefulSet is rendered");
+        assert_eq!(sts["spec"]["replicas"], 3);
+    }
+}

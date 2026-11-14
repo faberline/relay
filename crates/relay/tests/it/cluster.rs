@@ -1,20 +1,15 @@
-//! The in-process `RelayRaft` test group shared by the cluster tests:
-//! `raft_cluster.rs` and `raft_persistence.rs`. Every node runs a durable
-//! engine and raft state in its own directory, and serves its peer router on
-//! a real h2c listener. A node can be killed and started again from the same
-//! directory to test restart.
+//! Shared in-process 3-node `RelayRaft` test cluster (moved out of
+//! `raft_cluster.rs` so `raft_persistence.rs` can reuse it). Behavior is
+//! unchanged; only the visibility is widened to `pub(crate)`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use raft_runtime::Membership;
+use raft_runtime::{Membership, NodeId};
 use relay::{Relay, RelayCoreConfig, RelayRaft};
 
-/// Serializes the cluster tests of this binary, so their listeners and
-/// timing do not compete.
 pub(crate) static CLUSTER_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 pub(crate) struct Node {
     pub(crate) raft: Arc<RelayRaft>,
     pub(crate) serve: tokio::task::JoinHandle<()>,
@@ -45,10 +40,7 @@ impl Cluster {
         Cluster {
             urls,
             listeners,
-            membership: Membership {
-                voters: (0..n).collect(),
-                learners: vec![],
-            },
+            membership: Membership::new((0..n).map(NodeId::new).collect(), vec![]),
             nodes: (0..n).map(|_| None).collect(),
             _dirs: (0..n).map(|_| tempfile::tempdir().unwrap()).collect(),
             client: reqwest::Client::builder()
@@ -70,17 +62,17 @@ impl Cluster {
                 .into_owned(),
             ..RelayCoreConfig::default()
         }));
-        let peers: HashMap<u64, String> = self
+        let peers: HashMap<NodeId, String> = self
             .urls
             .iter()
             .filter(|(k, _)| **k != id as u64)
-            .map(|(k, v)| (*k, v.clone()))
+            .map(|(k, v)| (NodeId::new(*k), v.clone()))
             .collect();
         let raft = Arc::new(
             RelayRaft::spawn(
                 engine,
                 &self._dirs[id].path().join("raft"),
-                id as u64,
+                NodeId::new(id as u64),
                 self.membership.clone(),
                 peers,
                 RelayRaft::host_config(snapshot_every),

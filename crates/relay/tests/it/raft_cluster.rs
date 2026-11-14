@@ -15,8 +15,6 @@ use std::time::{Duration, Instant};
 
 use relay::PubCommand;
 
-use crate::cluster::{Cluster, CLUSTER_TEST_LOCK};
-
 fn cmd(id: &str) -> PubCommand {
     PubCommand {
         subject: "s".to_string(),
@@ -28,6 +26,8 @@ fn cmd(id: &str) -> PubCommand {
         appended_at: chrono::Utc::now(),
     }
 }
+
+use crate::cluster::{Cluster, CLUSTER_TEST_LOCK};
 
 /// AC2 + failover: exactly one leader; a leader publish applies on every
 /// node's engine; a follower publish is forwarded by the host; a direct
@@ -224,7 +224,7 @@ async fn fresh_node_catches_up_via_install_snapshot() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert!(
-        c.raft(2).applied_index() >= 20,
+        c.raft(2).applied_index().get() >= 20,
         "snapshot restore set the applied floor"
     );
     let got = c.message_ids(2);
@@ -729,6 +729,40 @@ async fn real_h2c_raft_cluster_smoke() {
         );
     }
     println!("real h2c raft cluster smoke");
+    c.shutdown().await;
+}
+
+/// #135: a rolling restart of all three voters, one at a time on the same data
+/// directories, loses no acked message and keeps the publish order.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rolling_restart_keeps_all_acked_messages() {
+    let _guard = CLUSTER_TEST_LOCK.lock().await;
+    let mut c = Cluster::prepare(3).await;
+    c.start_all(1024);
+    let leader = c.wait_leader().await;
+    for i in 0..20 {
+        let (_, out) = c
+            .raft(leader)
+            .publish(&cmd(&format!("m{i}")))
+            .await
+            .unwrap();
+        assert!(!out.expect("outcome").deduped);
+    }
+    c.wait_converged(20).await;
+    for id in 0..3usize {
+        c.kill(id).await;
+        c.start_node(id, 1024);
+        c.wait_leader().await;
+        c.wait_converged(20).await;
+    }
+    let want: Vec<String> = (0..20).map(|i| format!("m{i}")).collect();
+    for id in 0..3usize {
+        assert_eq!(
+            c.message_ids(id),
+            want,
+            "node {id} holds m0..m19 in order after the rolling restart"
+        );
+    }
     c.shutdown().await;
 }
 // HANDWRITE-END

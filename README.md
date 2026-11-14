@@ -123,6 +123,8 @@ and admin verbs (`--out`, `relay backup`, `relay issue …`,
 
 ### Operations
 
+Start with [docs/operations/install.md](docs/operations/install.md); the operator runbook is [docs/operations/runbook.md](docs/operations/runbook.md).
+
 #### Kubernetes-native deployment
 
 An operator-rendered StatefulSet with downward-API env auto-mode reads, offline
