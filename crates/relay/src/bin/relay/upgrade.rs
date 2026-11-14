@@ -11,7 +11,7 @@ pub(crate) struct UpgradeArgs {
     #[arg(long)]
     pub(crate) check: bool,
     /// Install this exact version (`0.4.3` or `relay@0.4.3`) instead of the latest.
-    #[arg(long)]
+    #[arg(long = "version", alias = "tag")]
     pub(crate) tag: Option<String>,
     /// Reinstall even when already on the selected version.
     #[arg(long)]

@@ -1,6 +1,7 @@
 //! Bare `relay` (no subcommand): run the broker server — the former
 //! `relay-server` entrypoint, env-driven with flag overrides.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -137,21 +138,11 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
     // process lifetime — dropping it would abort the tick/pump tasks.
     let mut peer_transport = None;
     let raft = if raft_runtime::cluster::replica_mode() {
-        let transport = relay::tls::peer::PeerTlsConfig::from_env()?
-            .map(|config| config.peer_transport())
+        let transport = peer_tls::PeerTlsConfig::from_env(relay::tls::PEER_ENV_PREFIX)?
+            .map(|config| raft_runtime::PeerTransport::from_config(&config))
             .transpose()?;
-        let (peer_port, peer_scheme) = match transport.as_ref() {
-            Some(_) => (args.raft_port, "https"),
-            None => (
-                bind.rsplit(':')
-                    .next()
-                    .and_then(|port| port.parse::<u16>().ok())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("cannot derive the raft peer port from --bind {bind}")
-                    })?,
-                "http",
-            ),
-        };
+        let (peer_port, peer_scheme) =
+            raft_peer_endpoint(&bind, args.raft_port, transport.is_some())?;
         let topo = raft_runtime::ClusterTopology::from_env_with_scheme(
             "relay",
             &args.peer_service,
@@ -160,10 +151,7 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
             peer_scheme,
         )?;
         let data_dir = state.config().core.data_dir.clone();
-        anyhow::ensure!(
-            !data_dir.is_empty(),
-            "replica/HA mode requires a durable --data-dir (RELAY_DATA_DIR)"
-        );
+        require_replica_data_dir(&data_dir)?;
         let raft = std::sync::Arc::new(match transport.clone() {
             Some(transport) => relay::RelayRaft::from_topology_with_peer_transport(
                 state.relay_handle(),
@@ -213,11 +201,16 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
         (Some(raft), Some(_)) => Some(raft.router()),
         _ => None,
     };
+    // TLS on the public listener when RELAY_TLS_CERT and RELAY_TLS_KEY are both
+    // set; a partial pair stops the start here (#136).
+    let public_tls = relay::tls::public::PublicTlsConfig::from_env()?;
     let listener = tokio::net::TcpListener::bind(&bind).await?;
-    tracing::info!(
-        addr = %listener.local_addr()?,
-        "relay listening (HTTP/1.1 + HTTP/2 cleartext)"
-    );
+    let scheme = if public_tls.is_some() {
+        "HTTPS (HTTP/1.1 + HTTP/2 over TLS)"
+    } else {
+        "HTTP/1.1 + HTTP/2 cleartext"
+    };
+    tracing::info!(addr = %listener.local_addr()?, "relay listening ({scheme})");
 
     let peer_server = match (peer_transport, peer_router) {
         (Some(transport), Some(router)) => {
@@ -241,12 +234,20 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
     // service shell: `start_drain` flips `/readyz` to 503 for the grace window
     // before the listener closes.
     let grace = Duration::from_secs(args.grace_secs);
-    service_http::serve(
-        listener,
-        app,
-        service_http::shutdown_with_drain(move || state.start_drain(), grace),
-    )
-    .await;
+    let shutdown = service_http::shutdown_with_drain(move || state.start_drain(), grace);
+    match public_tls {
+        Some(tls) => {
+            let server = Arc::new(tls.rustls_server_config()?);
+            service_http::serve_tls(
+                listener,
+                app,
+                service_http::config_source(move || Some(server.clone())),
+                shutdown,
+            )
+            .await;
+        }
+        None => service_http::serve(listener, app, shutdown).await,
+    }
     if let Some((shutdown, serve)) = peer_server {
         let _ = shutdown.send(());
         serve.await.context("relay peer listener task")??;
@@ -260,4 +261,70 @@ fn peer_bind_address(bind: &str, raft_port: u16) -> Result<String> {
         .with_context(|| format!("cannot derive peer bind address from {bind}"))?;
     anyhow::ensure!(!host.is_empty(), "--bind must include a host");
     Ok(format!("{host}:{raft_port}"))
+}
+
+fn raft_peer_endpoint(bind: &str, raft_port: u16, peer_tls: bool) -> Result<(u16, &'static str)> {
+    if peer_tls {
+        Ok((raft_port, "https"))
+    } else {
+        let port = bind
+            .rsplit(':')
+            .next()
+            .and_then(|port| port.parse::<u16>().ok())
+            .ok_or_else(|| {
+                anyhow::anyhow!("cannot derive the raft peer port from --bind {bind}")
+            })?;
+        Ok((port, "http"))
+    }
+}
+
+fn require_replica_data_dir(data_dir: &str) -> Result<()> {
+    anyhow::ensure!(
+        !data_dir.is_empty(),
+        "replica/HA mode requires a durable --data-dir (RELAY_DATA_DIR)"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_raft_peer_endpoint_tls_on() {
+        let (port, scheme) = raft_peer_endpoint("0.0.0.0:8080", 9443, true).unwrap();
+        assert_eq!(port, 9443);
+        assert_eq!(scheme, "https");
+    }
+
+    #[test]
+    fn test_raft_peer_endpoint_tls_off() {
+        let (port, scheme) = raft_peer_endpoint("0.0.0.0:8080", 9443, false).unwrap();
+        assert_eq!(port, 8080);
+        assert_eq!(scheme, "http");
+
+        let (port, scheme) = raft_peer_endpoint("[::]:9090", 9443, false).unwrap();
+        assert_eq!(port, 9090);
+        assert_eq!(scheme, "http");
+    }
+
+    #[test]
+    fn test_raft_peer_endpoint_invalid_bind() {
+        let err = raft_peer_endpoint("localhost", 9443, false).unwrap_err();
+        assert!(err.to_string().contains("localhost"));
+
+        let err = raft_peer_endpoint("0.0.0.0:notaport", 9443, false).unwrap_err();
+        assert!(err.to_string().contains("0.0.0.0:notaport"));
+    }
+
+    #[test]
+    fn test_require_replica_data_dir() {
+        assert!(require_replica_data_dir("/var/data/relay").is_ok());
+
+        let err = require_replica_data_dir("").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "replica/HA mode requires a durable --data-dir (RELAY_DATA_DIR)"
+        );
+    }
 }

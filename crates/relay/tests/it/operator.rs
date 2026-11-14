@@ -13,12 +13,31 @@
 #![cfg(feature = "operator")]
 
 use std::collections::HashMap;
+use std::process::Command;
 
 use relay::operator::render::render;
 use relay::operator::{crd_yaml, Relay, RelaySpec};
 use relay::tls::install_default_crypto_provider;
 use serde_json::Value;
 use service_k8s::{ClusterSpec, ManagedService, ReadyFacts};
+
+fn run(args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_relay"))
+        .args(args)
+        .output()
+        .expect("run relay binary")
+}
+
+fn stdout(args: &[&str]) -> String {
+    let out = run(args);
+    assert!(
+        out.status.success(),
+        "`relay {}` failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).expect("utf8 stdout")
+}
 
 fn spec(replicas: u32) -> RelaySpec {
     RelaySpec {
@@ -408,5 +427,337 @@ fn backup_cron_job_renders_only_when_policy_set() {
         "destination is a FLAT URI STRING (structural schemas cannot carry the \
          tagged-union BackupDestination)"
     );
+}
+
+/// True when every key of `selector` is in `labels` with the same value, and
+/// `selector` is not empty.
+fn selects(selector: &Value, labels: &Value) -> bool {
+    let Some(selector) = selector.as_object().filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    selector.iter().all(|(k, v)| labels.get(k) == Some(v))
+}
+
+/// The rendered StatefulSet, headless Service, client Service and PDB link up
+/// for raft peer discovery.
+#[test]
+fn render_links_statefulset_services_and_pdb() {
+    let objs = render(&Relay::new("relay", spec(3)));
+    let sts = of_kind(&objs, "StatefulSet");
+    let services: Vec<&Value> = objs.iter().filter(|o| o["kind"] == "Service").collect();
+    assert_eq!(
+        services.len(),
+        2,
+        "render must emit a headless and a client Service"
+    );
+    let headless = services
+        .iter()
+        .copied()
+        .find(|s| s["spec"]["clusterIP"] == "None")
+        .expect("render has no Service with clusterIP None");
+    let client = services
+        .iter()
+        .copied()
+        .find(|s| s["spec"]["clusterIP"].is_null())
+        .expect("render has no client Service");
+    let pdb = of_kind(&objs, "PodDisruptionBudget");
+
+    assert_eq!(
+        headless["metadata"]["name"], "relay-headless",
+        "headless Service name"
+    );
+    assert_eq!(
+        sts["spec"]["serviceName"], headless["metadata"]["name"],
+        "StatefulSet serviceName must name the headless Service"
+    );
+    assert_eq!(
+        headless["spec"]["publishNotReadyAddresses"], true,
+        "headless Service must publishNotReadyAddresses"
+    );
+
+    let container = &sts["spec"]["template"]["spec"]["containers"][0];
+    let container_ports = container["ports"].as_array().expect("container ports");
+    for (name, number) in [("http", 7000), ("raft", 7001)] {
+        let port = headless["spec"]["ports"]
+            .as_array()
+            .expect("headless ports")
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("headless Service has no port named {name}"));
+        assert_eq!(port["port"], number, "headless Service port {name} number");
+        assert_eq!(
+            port["targetPort"], name,
+            "headless Service port {name} must target the container port name"
+        );
+        let on_container = container_ports
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("StatefulSet container has no port named {name}"));
+        assert_eq!(
+            on_container["containerPort"], number,
+            "StatefulSet container port {name} must equal the Service port"
+        );
+    }
+
+    let env = env_of(sts);
+    let get = |k: &str| {
+        env.iter()
+            .find(|(n, _)| *n == k)
+            .unwrap_or_else(|| panic!("missing env {k}"))
+            .1
+    };
+    assert_eq!(
+        get("RELAY_PEER_SERVICE")["value"],
+        headless["metadata"]["name"],
+        "env RELAY_PEER_SERVICE must equal the headless Service name"
+    );
+    assert_eq!(
+        get("RELAY_RAFT_PORT")["value"],
+        "7001",
+        "env RELAY_RAFT_PORT must equal the raft container port"
+    );
+
+    let pod_labels = &sts["spec"]["template"]["metadata"]["labels"];
+    assert!(
+        selects(&sts["spec"]["selector"]["matchLabels"], pod_labels),
+        "StatefulSet selector must match the pod template labels"
+    );
+    assert!(
+        selects(&headless["spec"]["selector"], pod_labels),
+        "headless Service selector must match the pod labels"
+    );
+    assert!(
+        selects(&client["spec"]["selector"], pod_labels),
+        "client Service selector must match the pod labels"
+    );
+    assert!(
+        selects(&pdb["spec"]["selector"]["matchLabels"], pod_labels),
+        "PodDisruptionBudget selector must match the pod labels"
+    );
+}
+
+/// R2 / AC1..AC4 — Close capability claim: Kubernetes-Native Deployment /
+/// relayspec-crd-operator-instance-render (issue #34).
+///
+/// Proves the whole chain: the CR that `relay k8s instance render` prints
+/// is a valid `Relay` custom resource, and `relay::operator::render::render`
+/// turns it into the child objects (StatefulSet, ServiceAccount, Services, PDB).
+#[test]
+fn relayspec_crd_operator_instance_render() {
+    let profiles = [
+        ("dev", "default", 1, "1Gi"),
+        ("staging", "staging", 1, "20Gi"),
+        ("prod", "production", 3, "100Gi"),
+    ];
+
+    for (profile, expected_ns, expected_replicas, expected_storage) in profiles {
+        let yaml = stdout(&["k8s", "instance", "render", "--profile", profile]);
+        let mut cr: Relay = serde_yaml::from_str(&yaml)
+            .unwrap_or_else(|e| panic!("profile {profile} YAML does not parse into Relay: {e}"));
+
+        assert_eq!(
+            cr.metadata.namespace.as_deref(),
+            Some(expected_ns),
+            "profile {profile} CR metadata.namespace"
+        );
+        let cr_name = cr
+            .metadata
+            .name
+            .clone()
+            .unwrap_or_else(|| "relay".to_string());
+
+        let uid = format!("uid-{profile}-test");
+        cr.metadata.uid = Some(uid.clone());
+
+        let objs = render(&cr);
+        assert!(
+            !objs.is_empty(),
+            "profile {profile}: render produced no objects"
+        );
+
+        // Required child objects: StatefulSet, ServiceAccount, headless Service, client Service, PDB.
+        let sts = of_kind(&objs, "StatefulSet");
+        assert_eq!(
+            sts["spec"]["replicas"], expected_replicas,
+            "profile {profile} replicas"
+        );
+
+        let env = env_of(sts);
+        let get_env = |k: &str| env.iter().find(|(n, _)| *n == k).unwrap().1;
+        assert_eq!(
+            get_env("RELAY_DATA_DIR")["value"],
+            "/data",
+            "profile {profile} RELAY_DATA_DIR env"
+        );
+
+        assert_eq!(
+            sts["spec"]["volumeClaimTemplates"][0]["spec"]["resources"]["requests"]["storage"],
+            expected_storage,
+            "profile {profile} PVC storage"
+        );
+
+        let _sa = of_kind(&objs, "ServiceAccount");
+        let _headless = objs
+            .iter()
+            .find(|o| o["kind"] == "Service" && o["spec"]["clusterIP"] == "None")
+            .unwrap_or_else(|| panic!("profile {profile} missing headless Service"));
+        let _client = objs
+            .iter()
+            .find(|o| o["kind"] == "Service" && o["spec"]["type"] == "ClusterIP")
+            .unwrap_or_else(|| panic!("profile {profile} missing client Service"));
+        let _pdb = of_kind(&objs, "PodDisruptionBudget");
+
+        // Auth and Secret volume assertions:
+        if profile == "prod" {
+            assert_eq!(
+                get_env("RELAY_AUTH")["value"],
+                "required",
+                "prod profile requires RELAY_AUTH"
+            );
+            let vols = sts["spec"]["template"]["spec"]["volumes"]
+                .as_array()
+                .expect("volumes array");
+            let vol = vols
+                .iter()
+                .find(|v| v["name"] == "relay-token-registry")
+                .expect("prod profile missing token-registry volume");
+            assert_eq!(
+                vol["secret"]["secretName"], "relay-token-registry",
+                "token-registry secretName"
+            );
+        } else if profile == "dev" {
+            assert!(
+                !env.iter().any(|(k, _)| *k == "RELAY_AUTH"),
+                "dev profile must not render RELAY_AUTH"
+            );
+            if let Some(vols) = sts["spec"]["template"]["spec"]["volumes"].as_array() {
+                assert!(
+                    vols.iter().all(|v| v["name"] != "relay-token-registry"),
+                    "dev profile must not render token-registry volume"
+                );
+            }
+        }
+
+        // Owner reference & namespace on every rendered object.
+        for obj in &objs {
+            let kind = obj["kind"].as_str().unwrap_or("unknown");
+            assert_eq!(
+                obj["metadata"]["namespace"], expected_ns,
+                "profile {profile} object {kind} namespace mismatch"
+            );
+
+            let owner_refs = obj["metadata"]["ownerReferences"]
+                .as_array()
+                .unwrap_or_else(|| {
+                    panic!("profile {profile} object {kind} missing ownerReferences")
+                });
+            assert_eq!(
+                owner_refs.len(),
+                1,
+                "profile {profile} object {kind} expected exactly 1 owner reference"
+            );
+            assert_eq!(
+                owner_refs[0]["uid"], uid,
+                "profile {profile} object {kind} ownerRef uid mismatch"
+            );
+            assert_eq!(
+                owner_refs[0]["name"], cr_name,
+                "profile {profile} object {kind} ownerRef name mismatch"
+            );
+            assert_eq!(
+                owner_refs[0]["kind"], "Relay",
+                "profile {profile} object {kind} ownerRef kind mismatch"
+            );
+            assert_eq!(
+                owner_refs[0]["apiVersion"], "relay.dev/v1alpha1",
+                "profile {profile} object {kind} ownerRef apiVersion mismatch"
+            );
+        }
+    }
+
+    // The template profile is excluded on purpose, with a comment: its
+    // numeric fields are REPLACE_ME__* placeholders and must not parse.
+    let template_yaml = stdout(&["k8s", "instance", "render", "--profile", "template"]);
+    let template_res: Result<Relay, _> = serde_yaml::from_str(&template_yaml);
+    assert!(
+        template_res.is_err(),
+        "template profile carries placeholder values and must not parse into Relay"
+    );
+}
+
+/// The operator ClusterRole (`k8s/operator/rbac.yaml`) covers every kind that
+/// `render()` can emit, the backup CronJob included, and uses no wildcard.
+#[test]
+fn operator_cluster_role_covers_every_rendered_kind() {
+    let mut with_backup = spec(3);
+    with_backup.backup = Some(relay::operator::crd::RelayBackupSpec {
+        policy: service_backup::ScheduledBackupPolicy {
+            schedule: "0 3 * * *".into(),
+            destination: "s3://relay-backups/prod".into(),
+            retention_secs: Some(604_800),
+        },
+        admin_token_secret: Some("relay-backup-token".into()),
+    });
+    let mut cr = Relay::new("relay", with_backup);
+    cr.metadata.namespace = Some("production".into());
+    let objs = render(&cr);
+    assert!(
+        objs.iter().any(|o| o["kind"] == "CronJob"),
+        "render must emit the backup CronJob"
+    );
+
+    // rbac.yaml holds several YAML documents; split them and find the ClusterRole.
+    let rbac = include_str!("../../../../k8s/operator/rbac.yaml");
+    let role: Value = rbac
+        .split("\n---")
+        .map(|doc| serde_yaml::from_str::<Value>(doc).expect("rbac.yaml document"))
+        .find(|doc| doc["kind"] == "ClusterRole")
+        .expect("ClusterRole in rbac.yaml");
+    let rules = role["rules"].as_array().expect("ClusterRole rules");
+
+    for rule in rules {
+        for field in ["apiGroups", "resources", "verbs"] {
+            let values = rule[field].as_array().expect("rule list");
+            assert!(
+                values.iter().all(|v| v.as_str() != Some("*")),
+                "ClusterRole rule {rule} uses a wildcard in {field}"
+            );
+        }
+    }
+
+    fn resource_of(kind: &str) -> &'static str {
+        match kind {
+            "ServiceAccount" => "serviceaccounts",
+            "StatefulSet" => "statefulsets",
+            "Service" => "services",
+            "PodDisruptionBudget" => "poddisruptionbudgets",
+            "CronJob" => "cronjobs",
+            other => panic!("render emits {other}: add its resource to this table"),
+        }
+    }
+
+    const VERBS: [&str; 7] = [
+        "get", "list", "watch", "create", "update", "patch", "delete",
+    ];
+    for obj in &objs {
+        let kind = obj["kind"].as_str().expect("rendered kind");
+        let api_version = obj["apiVersion"].as_str().expect("rendered apiVersion");
+        let group = api_version.split_once('/').map_or("", |(g, _)| g);
+        let resource = resource_of(kind);
+        let has = |rule: &Value, field: &str, want: &str| {
+            rule[field]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(want)))
+        };
+        let covered = rules.iter().any(|rule| {
+            has(rule, "apiGroups", group)
+                && has(rule, "resources", resource)
+                && VERBS.iter().all(|verb| has(rule, "verbs", verb))
+        });
+        assert!(
+            covered,
+            "ClusterRole lacks {group:?}/{resource} for rendered {kind}"
+        );
+    }
 }
 // HANDWRITE-END
