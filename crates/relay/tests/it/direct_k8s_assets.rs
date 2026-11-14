@@ -243,4 +243,160 @@ fn dockerfiles_run_non_root_with_the_relay_entrypoint() {
         "gke-test must pin the image name ghcr.io/faberline/relay"
     );
 }
+
+/// Every YAML document of one file, in order.
+fn docs_of(name: &str, text: &str) -> Vec<Value> {
+    serde_yaml::Deserializer::from_str(text)
+        .map(|doc| {
+            Value::deserialize(doc).unwrap_or_else(|err| panic!("{name} does not parse: {err}"))
+        })
+        .collect()
+}
+
+/// The StatefulSet, headless Service, client Service and PDB form one raft
+/// peer topology: a drift in any link breaks peer discovery.
+#[test]
+fn statefulset_raft_service_topology_links_in_base_assets() {
+    let sts = yaml(include_str!("../../../../k8s/base/statefulset.yaml"));
+    let services = docs_of(
+        "k8s/base/service.yaml",
+        include_str!("../../../../k8s/base/service.yaml"),
+    );
+    let pdb = yaml(include_str!("../../../../k8s/base/pdb.yaml"));
+    assert_eq!(
+        services.len(),
+        2,
+        "k8s/base/service.yaml must hold the headless and the client Service"
+    );
+    let headless = services
+        .iter()
+        .find(|s| s["spec"]["clusterIP"] == "None")
+        .expect("k8s/base/service.yaml has no Service with clusterIP None");
+    let client = services
+        .iter()
+        .find(|s| s["spec"]["clusterIP"].is_null())
+        .expect("k8s/base/service.yaml has no client Service");
+    let headless_name = headless["metadata"]["name"]
+        .as_str()
+        .expect("headless Service has a name");
+
+    assert_eq!(
+        sts["spec"]["serviceName"], headless_name,
+        "StatefulSet spec.serviceName must name the headless Service"
+    );
+    assert_eq!(
+        headless["spec"]["publishNotReadyAddresses"], true,
+        "headless Service must publishNotReadyAddresses so voters find each other before ready"
+    );
+
+    let container = &sts["spec"]["template"]["spec"]["containers"][0];
+    let container_ports = container["ports"].as_sequence().expect("container ports");
+    let container_port = |name: &str| -> u64 {
+        container_ports
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("StatefulSet container has no port named {name}"))
+            ["containerPort"]
+            .as_u64()
+            .expect("containerPort is a number")
+    };
+    let service_ports = headless["spec"]["ports"]
+        .as_sequence()
+        .expect("headless ports");
+    for (name, number) in [("http", 7000u64), ("raft", 7001u64)] {
+        let port = service_ports
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("headless Service has no port named {name}"));
+        assert_eq!(port["port"], number, "headless Service port {name} number");
+        assert_eq!(
+            port["targetPort"], name,
+            "headless Service port {name} must target the container port name"
+        );
+        assert_eq!(
+            container_port(name),
+            number,
+            "StatefulSet container port {name} must equal the Service port"
+        );
+    }
+
+    let env = container["env"].as_sequence().expect("container env");
+    let env_value = |key: &str| -> Value {
+        env.iter()
+            .find(|e| e["name"] == key)
+            .unwrap_or_else(|| panic!("StatefulSet container has no env {key}"))["value"]
+            .clone()
+    };
+    assert_eq!(
+        env_value("RELAY_PEER_SERVICE"),
+        headless["metadata"]["name"],
+        "env RELAY_PEER_SERVICE must equal the headless Service name"
+    );
+    assert_eq!(
+        env_value("RELAY_RAFT_PORT"),
+        Value::String(container_port("raft").to_string()),
+        "env RELAY_RAFT_PORT must equal the raft container port"
+    );
+
+    let pod_labels = &sts["spec"]["template"]["metadata"]["labels"];
+    assert!(pod_labels.is_mapping(), "pod template labels must be a map");
+    assert_eq!(
+        &sts["spec"]["selector"]["matchLabels"], pod_labels,
+        "StatefulSet selector.matchLabels must equal the pod template labels"
+    );
+    assert_eq!(
+        &headless["spec"]["selector"], pod_labels,
+        "headless Service selector must equal the pod labels"
+    );
+    assert_eq!(
+        &client["spec"]["selector"], pod_labels,
+        "client Service selector must equal the pod labels"
+    );
+    assert_eq!(
+        &pdb["spec"]["selector"]["matchLabels"], pod_labels,
+        "PodDisruptionBudget selector.matchLabels must equal the pod labels"
+    );
+}
+
+/// The gke-test overlay keeps three voters, one per node.
+#[test]
+fn gke_test_overlay_merged_intent_and_affinity() {
+    let base = yaml(include_str!("../../../../k8s/base/statefulset.yaml"));
+    let patch = yaml(include_str!(
+        "../../../../k8s/overlays/gke-test/statefulset-patch.yaml"
+    ));
+    assert_eq!(
+        base["spec"]["podManagementPolicy"], "Parallel",
+        "base StatefulSet podManagementPolicy must stay Parallel"
+    );
+    assert_eq!(
+        patch["spec"]["replicas"], 3,
+        "gke-test patch must set replicas 3"
+    );
+    let env = patch["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_sequence()
+        .expect("gke-test patch container env");
+    for key in ["REPLICAS_PER_SHARD", "VOTER_COUNT"] {
+        let entry = env
+            .iter()
+            .find(|e| e["name"] == key)
+            .unwrap_or_else(|| panic!("gke-test patch has no env {key}"));
+        assert_eq!(
+            entry["value"], "3",
+            "gke-test patch env {key} must equal replicas 3"
+        );
+    }
+    let terms = patch["spec"]["template"]["spec"]["affinity"]["podAntiAffinity"]
+        ["requiredDuringSchedulingIgnoredDuringExecution"]
+        .as_sequence()
+        .expect("gke-test patch needs a required pod anti-affinity");
+    let term = terms
+        .iter()
+        .find(|t| t["topologyKey"] == "kubernetes.io/hostname")
+        .expect("gke-test anti-affinity must use topologyKey kubernetes.io/hostname");
+    assert_eq!(
+        term["labelSelector"]["matchLabels"], base["spec"]["template"]["metadata"]["labels"],
+        "gke-test anti-affinity matchLabels must equal the base pod labels"
+    );
+}
 // HANDWRITE-END

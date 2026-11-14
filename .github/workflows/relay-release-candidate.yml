@@ -125,7 +125,17 @@ jobs:
           shared-key: relay-candidate-${{ matrix.target }}
       - name: Build exact release candidate binary
         shell: bash
-        run: cargo build --release --locked -p relay --bin relay --target ${{ matrix.target }}
+        run: cargo build --release --locked -p relay --bin relay --features backup --target ${{ matrix.target }}
+      - name: Verify backup support is compiled in
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/relay"
+          test -x "$bin"
+          if grep -aq "compiled without backup support" "$bin"; then
+            echo "release candidate binary lacks the backup feature" >&2
+            exit 1
+          fi
       - name: Package archive and checksum sidecar
         shell: bash
         run: |
