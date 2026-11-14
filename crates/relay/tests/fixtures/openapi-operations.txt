@@ -1,0 +1,10 @@
+GET /admin/backup
+GET /v1/{subject}/len
+POST /v1/{subject}/ack
+POST /v1/{subject}/ack-batch
+POST /v1/{subject}/consume
+POST /v1/{subject}/heartbeat
+POST /v1/{subject}/lease
+POST /v1/{subject}/lease-batch
+POST /v1/{subject}/publish
+POST /v1/{subject}/publish-batch

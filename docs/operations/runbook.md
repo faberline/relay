@@ -119,3 +119,10 @@ metric today: use `kubectl` and `/readyz` for those.
 
 - Expected: `rollout status` reports a complete rollout, one pod at a time, and
   each pod is `Ready` before the next one restarts. The version compatibility policy is in [upgrade.md](upgrade.md); the rolling-restart test is `raft_cluster::rolling_restart_keeps_all_acked_messages`.
+
+## Alert: RelayLeaseReclaiming
+
+- Symptom: the alert `RelayLeaseReclaiming` from `k8s/components/observability/prometheusrule.yaml` fires. Its rule is `increase(relay_requests_total{route=~".*lease.*",status=~"5.."}[5m]) > 0`, held for 5 minutes.
+- Check: `kubectl -n relay logs relay-0 --tail=100`, and `kubectl -n relay get pods`. Look for a node that is down or a leader change.
+- Command: `kubectl -n relay get pods`
+- Expected: all pods are `Ready`. Once the leader is back, the alert clears within 5 minutes.
