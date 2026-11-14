@@ -12,6 +12,7 @@ How to run, configure, and test relay.
 | [limits.md](limits.md) | Body size, lease backoff, snapshot interval, priority bands, replicas, data size and request rates, each with its source. |
 | [threat-model.md](../security/threat-model.md) | Assets, trust boundaries, the threats with their controls and tests, and what the model leaves out. |
 | [upgrade.md](upgrade.md) | Version compatibility policy and the rolling-upgrade order. |
+| [performance.md](performance.md) | Recorded throughput, latency and resource numbers, the gate thresholds and the SBOM. |
 | [worker-protocol.md](../worker-protocol.md) | The HTTP/2 + OpenAPI contract that workers in any language use. |
 | [perf-gate.md](../perf-gate.md) | The competitor perf gate and how to run it. |
 | [restart-failover-soak.md](restart-failover-soak.md) | The restart, persistence, backup and bounded soak gate (`scripts/verify-restart-failover-soak.sh`) and its last recorded result. |
