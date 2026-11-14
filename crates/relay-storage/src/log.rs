@@ -63,6 +63,8 @@ pub struct Log {
     /// Bytes in the active (last) segment.
     active_bytes: u64,
     commit_path: Option<PathBuf>,
+    /// Number of fsyncs this log has issued (test and metrics aid).
+    syncs: u64,
 }
 
 fn sanitize(s: &str) -> String {
@@ -102,11 +104,13 @@ fn io_err(e: impl std::fmt::Display) -> io::Error {
     io::Error::other(e.to_string())
 }
 
-/// Map relay's fsync policy onto core's. Core syncs inside `append` only under
-/// `Always`; relay flushes and syncs at its own points (see `append_at`).
+/// Map relay's fsync policy onto core's. Core must never sync inside `append`:
+/// relay flushes and syncs at its own points, one sync per append or per batch
+/// (group commit). Mapping `Always` to core `Always` made core fsync every
+/// frame (#189).
 fn core_policy(policy: FsyncPolicy) -> CoreFsync {
     match policy {
-        FsyncPolicy::Always => CoreFsync::Always,
+        FsyncPolicy::Always => CoreFsync::Interval,
         FsyncPolicy::Interval => CoreFsync::Interval,
         FsyncPolicy::Os => CoreFsync::Os,
     }
@@ -139,6 +143,7 @@ impl Log {
             writer: None,
             active_bytes: 0,
             commit_path: None,
+            syncs: 0,
         };
 
         if config.data_dir.is_empty() {
@@ -196,10 +201,10 @@ impl Log {
                     // End of file, or a torn tail ending at the last complete frame.
                     break;
                 };
-                let entry: LogEntry = serde_json::from_slice(&frame.payload)
+                let entry: LogEntry = serde_json::from_slice(frame.payload())
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                 let seq = log.len;
-                if frame.seq != seq {
+                if frame.seq() != seq {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("frame seq mismatch in {}", path.display()),
@@ -242,9 +247,7 @@ impl Log {
 
     /// Close the active segment (if any) and open a fresh one at `base`.
     fn start_new_segment(&mut self, base: Seq) -> io::Result<()> {
-        if let Some(w) = self.writer.as_mut() {
-            w.sync().map_err(io_err)?;
-        }
+        self.sync_writer()?;
         let path = self.segment_path(base);
         self.writer = Some(open_writer(&path, self.fsync)?);
         self.active_bytes = 0;
@@ -255,6 +258,11 @@ impl Log {
             last_ts: Utc::now(),
         });
         Ok(())
+    }
+
+    /// Number of fsyncs this log has issued (test and metrics aid).
+    pub fn sync_count(&self) -> u64 {
+        self.syncs
     }
 
     pub fn len(&self) -> Seq {
@@ -294,6 +302,7 @@ impl Log {
 
         if let Some(mut writer) = self.writer.take() {
             writer.sync().map_err(io_err)?;
+            self.syncs += 1;
         }
         for segment in self.segments.drain(..) {
             match std::fs::remove_file(&segment.path) {
@@ -428,17 +437,17 @@ impl Log {
             let mut off = idx_off;
             // Walk forward from the indexed point to `seq`.
             for _ in idx_seq..seq {
-                let Some(frame) = cursor.reread_frame_at(off).map_err(io_err)? else {
+                let Some(frame) = cursor.reread_large_mapped_frame_at(off).map_err(io_err)? else {
                     break;
                 };
-                off += FRAME_HEADER_BYTES + frame.payload.len() as u64;
+                off += FRAME_HEADER_BYTES + frame.payload().len() as u64;
             }
             for _ in seq..run_end {
-                let Some(frame) = cursor.reread_frame_at(off).map_err(io_err)? else {
+                let Some(frame) = cursor.reread_large_mapped_frame_at(off).map_err(io_err)? else {
                     break;
                 };
-                off += FRAME_HEADER_BYTES + frame.payload.len() as u64;
-                let entry: LogEntry = serde_json::from_slice(&frame.payload)
+                off += FRAME_HEADER_BYTES + frame.payload().len() as u64;
+                let entry: LogEntry = serde_json::from_slice(frame.payload())
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                 out.push(entry);
             }
@@ -478,8 +487,15 @@ impl Log {
     }
 
     fn fsync_active(&mut self) -> io::Result<()> {
+        self.sync_writer()
+    }
+
+    /// Sync the active writer, if any, and count the sync. Does nothing when
+    /// there is no open writer (RAM-only log).
+    fn sync_writer(&mut self) -> io::Result<()> {
         if let Some(writer) = self.writer.as_mut() {
             writer.sync().map_err(io_err)?;
+            self.syncs += 1;
         }
         Ok(())
     }
@@ -566,8 +582,9 @@ impl Log {
         };
         self.write_frame(&entry)?;
         match self.fsync {
-            // Core syncs inside `append` under `Always`: nothing more to do.
-            FsyncPolicy::Always => {}
+            // One sync for this entry before the append returns. Core does not
+            // sync inside `write_frame`, so this is the only sync per append.
+            FsyncPolicy::Always => self.fsync_active()?,
             FsyncPolicy::Interval => {
                 if let Some(w) = self.writer.as_mut() {
                     w.flush().map_err(io_err)?;
@@ -653,5 +670,20 @@ impl Log {
 
 fn open_writer(path: &PathBuf, policy: FsyncPolicy) -> io::Result<FramedLogWriter> {
     FramedLogWriter::open(path, core_policy(policy)).map_err(io_err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn core_policy_never_syncs_inside_append() {
+        for policy in [FsyncPolicy::Always, FsyncPolicy::Interval, FsyncPolicy::Os] {
+            assert!(
+                !core_policy(policy).should_sync_immediately(),
+                "core must never sync inside append"
+            );
+        }
+    }
 }
 // HANDWRITE-END

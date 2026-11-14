@@ -39,7 +39,7 @@ use chrono::{DateTime, Utc};
 use raft_runtime::{
     AppliedIndexStore, ClusterTopology, FsyncPolicy, HostConfig, Index, Membership, NodeId,
     OutcomeWindow, PeerTransport, ProposalCache, RaftHost, RaftStateMachine, RaftStore,
-    SnapshotPolicy,
+    SnapshotPolicy, StateMachineError,
 };
 use serde::{Deserialize, Serialize};
 
@@ -236,10 +236,10 @@ impl RelayStateMachine {
             .map(AppliedIndexStore::load)
             .transpose()
             .context("read Relay applied floor")?
-            .unwrap_or(0);
+            .unwrap_or_default();
         Ok(Arc::new(Self {
             relay,
-            applied: AtomicU64::new(applied),
+            applied: AtomicU64::new(applied.get()),
             applied_store,
             outcomes: Mutex::new(OutcomeWindow::default()),
             completed: Mutex::new(ProposalCache::default()),
@@ -254,14 +254,17 @@ impl RelayStateMachine {
             return;
         };
         if let Err(e) = store.store(index) {
-            tracing::warn!(index, error = %e, "raft: applied-marker persist failed (floor stale-low; at-least-once on restart)");
+            tracing::warn!(index = index.get(), error = %e, "raft: applied-marker persist failed (floor stale-low; at-least-once on restart)");
         }
     }
 
     /// Remove and return the engine outcome of the apply at `index` (the
     /// proposing handler claims it once; unclaimed outcomes age out).
     pub fn claim_outcome(&self, index: Index) -> Option<RelayOutcome> {
-        self.outcomes.lock().expect("outcome window").claim(index)
+        self.outcomes
+            .lock()
+            .expect("outcome window")
+            .claim(index.get())
     }
 
     /// The engine this state machine applies into.
@@ -271,7 +274,7 @@ impl RelayStateMachine {
 }
 
 impl RaftStateMachine for RelayStateMachine {
-    fn apply(&self, index: Index, command: &[u8]) -> Result<()> {
+    fn apply(&self, index: Index, command: &[u8]) -> Result<(), StateMachineError> {
         // New commands use the tagged RelayCommand envelope. A bare PubCommand
         // remains readable so an upgrade can replay resident pre-upgrade logs.
         let (proposal_id, decoded) = match serde_json::from_slice::<RelayEnvelope>(command) {
@@ -300,23 +303,37 @@ impl RaftStateMachine for RelayStateMachine {
                             .insert(id, outcome.clone());
                     }
                     let mut w = self.outcomes.lock().expect("outcome window");
-                    w.insert(index, outcome);
-                    w.advance(index);
+                    w.insert(index.get(), outcome);
+                    w.advance(index.get());
                 }
                 Err(e) => {
-                    tracing::warn!(index, error = %e, "raft: apply Relay command error (entry no-ops)")
+                    tracing::warn!(index = index.get(), error = %e, "raft: apply Relay command error (entry no-ops)")
                 }
             },
             Err(e) => {
-                tracing::warn!(index, error = %e, "raft: undecodable command (entry no-ops)")
+                tracing::warn!(index = index.get(), error = %e, "raft: undecodable command (entry no-ops)")
             }
         }
-        self.applied.store(index, Ordering::Release);
+        self.applied.store(index.get(), Ordering::Release);
         self.persist_marker(index);
         Ok(())
     }
 
-    fn snapshot(&self, writer: &mut dyn std::io::Write) -> Result<()> {
+    fn snapshot(&self, writer: &mut dyn std::io::Write) -> Result<(), StateMachineError> {
+        self.write_snapshot(writer).map_err(StateMachineError::from)
+    }
+
+    fn restore(&self, reader: &mut dyn std::io::Read) -> Result<(), StateMachineError> {
+        self.read_snapshot(reader).map_err(StateMachineError::from)
+    }
+
+    fn applied_index(&self) -> Index {
+        Index::new(self.applied.load(Ordering::Acquire))
+    }
+}
+
+impl RelayStateMachine {
+    fn write_snapshot(&self, writer: &mut dyn std::io::Write) -> Result<()> {
         let bytes = serde_json::to_vec(&EngineSnapshot {
             up_to: self.applied_index(),
             subjects: self.relay.dump_live()?,
@@ -330,7 +347,7 @@ impl RaftStateMachine for RelayStateMachine {
         Ok(())
     }
 
-    fn restore(&self, reader: &mut dyn std::io::Read) -> Result<()> {
+    fn read_snapshot(&self, reader: &mut dyn std::io::Read) -> Result<()> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes)?;
         let snap: EngineSnapshot = serde_json::from_slice(&bytes)?;
@@ -339,13 +356,9 @@ impl RaftStateMachine for RelayStateMachine {
             .lock()
             .expect("completed proposals")
             .restore(snap.completed_proposals);
-        self.applied.store(snap.up_to, Ordering::Release);
+        self.applied.store(snap.up_to.get(), Ordering::Release);
         self.persist_marker(snap.up_to);
         Ok(())
-    }
-
-    fn applied_index(&self) -> Index {
-        self.applied.load(Ordering::Acquire)
     }
 }
 
@@ -393,7 +406,7 @@ impl RelayStateMachine {
             } => RelayOutcome::Leased(self.relay.lease_on_node(
                 &subject,
                 &consumer_id,
-                executor_node,
+                executor_node.get(),
                 now,
             )?),
             RelayCommand::LeaseBatch {
@@ -405,7 +418,7 @@ impl RelayStateMachine {
             } => RelayOutcome::LeaseBatch(self.relay.lease_batch_on_node(
                 &subject,
                 &consumer_id,
-                executor_node,
+                executor_node.get(),
                 max,
                 now,
             )?),
@@ -416,9 +429,13 @@ impl RelayStateMachine {
                 epoch,
                 now,
             } => RelayOutcome::Acked {
-                accepted: self
-                    .relay
-                    .ack_on_node(&subject, &lease_id, executor_node, epoch, now)?,
+                accepted: self.relay.ack_on_node(
+                    &subject,
+                    &lease_id,
+                    executor_node.get(),
+                    epoch,
+                    now,
+                )?,
                 committed: self.relay.committed_offset(&subject)?,
             },
             RelayCommand::AckBatch {
@@ -429,10 +446,13 @@ impl RelayStateMachine {
             } => {
                 let mut accepted = 0;
                 for (lease_id, epoch) in acks {
-                    if self
-                        .relay
-                        .ack_on_node(&subject, &lease_id, executor_node, epoch, now)?
-                    {
+                    if self.relay.ack_on_node(
+                        &subject,
+                        &lease_id,
+                        executor_node.get(),
+                        epoch,
+                        now,
+                    )? {
                         accepted += 1;
                     }
                 }
@@ -450,7 +470,7 @@ impl RelayStateMachine {
             } => RelayOutcome::Released(self.relay.release_on_node(
                 &subject,
                 &lease_id,
-                executor_node,
+                executor_node.get(),
                 epoch,
                 now,
             )?),
@@ -463,7 +483,7 @@ impl RelayStateMachine {
             } => RelayOutcome::Heartbeat(self.relay.heartbeat_on_node(
                 &subject,
                 &lease_id,
-                executor_node,
+                executor_node.get(),
                 epoch,
                 now,
             )?),
@@ -609,10 +629,7 @@ impl RelayRaft {
     /// `snapshot_every` applied entries (tests pass a small threshold to arm
     /// InstallSnapshot quickly).
     pub fn host_config(snapshot_every: u64) -> HostConfig {
-        HostConfig {
-            snapshot: SnapshotPolicy::EveryEntries(snapshot_every),
-            ..HostConfig::default()
-        }
+        HostConfig::default().with_snapshot(SnapshotPolicy::EveryEntries(snapshot_every))
     }
 
     /// Drain the shared Raft host's in-flight peer RPCs before its h2 client

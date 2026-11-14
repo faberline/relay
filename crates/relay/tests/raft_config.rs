@@ -10,10 +10,15 @@
 
 use std::sync::Mutex;
 
-use raft_runtime::cluster::{replica_mode, ClusterTopology};
+use raft_runtime::{replica_mode, ClusterTopology, NodeId};
 
 // The standard env vars are process-global; serialize the env tests.
 static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+/// The raw ids of a membership list, for comparing with plain integers.
+fn ids(nodes: &[NodeId]) -> Vec<u64> {
+    nodes.iter().map(|node| node.get()).collect()
+}
 
 const QUARTET: [(&str, &str); 4] = [
     ("POD_NAME", "relay-1"),
@@ -55,12 +60,16 @@ fn topology_derives_from_standard_env_via_raft_runtime() {
     }
 
     let t = ClusterTopology::from_env("relay", "relay", 8080, "RELAY_PEERS").unwrap();
-    assert_eq!(t.node_id, 1, "node id = replica index from the pod ordinal");
-    assert_eq!(t.membership.voters, vec![0, 1, 2]);
-    assert!(t.membership.learners.is_empty());
+    assert_eq!(
+        t.node_id.get(),
+        1,
+        "node id = replica index from the pod ordinal"
+    );
+    assert_eq!(ids(t.membership.voters()), vec![0, 1, 2]);
+    assert!(t.membership.learners().is_empty());
     assert_eq!(t.peers.len(), 2, "self excluded");
-    assert_eq!(t.peers[&0], "http://relay-0.relay:8080");
-    assert_eq!(t.peers[&2], "http://relay-2.relay:8080");
+    assert_eq!(t.peers[&NodeId::new(0)], "http://relay-0.relay:8080");
+    assert_eq!(t.peers[&NodeId::new(2)], "http://relay-2.relay:8080");
 
     // RELAY_PEERS local override replaces the DNS-derived addresses.
     std::env::set_var(
@@ -68,8 +77,8 @@ fn topology_derives_from_standard_env_via_raft_runtime() {
         "127.0.0.1:7101,127.0.0.1:7102,127.0.0.1:7103",
     );
     let t = ClusterTopology::from_env("relay", "relay", 8080, "RELAY_PEERS").unwrap();
-    assert_eq!(t.peers[&0], "http://127.0.0.1:7101");
-    assert_eq!(t.peers[&2], "http://127.0.0.1:7103");
+    assert_eq!(t.peers[&NodeId::new(0)], "http://127.0.0.1:7101");
+    assert_eq!(t.peers[&NodeId::new(2)], "http://127.0.0.1:7103");
     clear_env();
 }
 
@@ -85,25 +94,28 @@ fn topology_derives_https_scheme_and_peers_override() {
         ClusterTopology::from_env_with_scheme("relay", "relay", 8080, "RELAY_PEERS", "https")
             .expect("ClusterTopology::from_env_with_scheme with https should succeed");
     assert_eq!(
-        t_https.node_id, 1,
+        t_https.node_id.get(),
+        1,
         "node_id matches pod ordinal from POD_NAME"
     );
     assert_eq!(
-        t_https.membership.voters,
+        ids(t_https.membership.voters()),
         vec![0, 1, 2],
         "membership.voters contains all voters"
     );
     assert!(
-        t_https.membership.learners.is_empty(),
+        t_https.membership.learners().is_empty(),
         "membership.learners is empty"
     );
     assert_eq!(t_https.peers.len(), 2, "peers excludes self");
     assert_eq!(
-        t_https.peers[&0], "https://relay-0.relay:8080",
+        t_https.peers[&NodeId::new(0)],
+        "https://relay-0.relay:8080",
         "peers[0] has https scheme"
     );
     assert_eq!(
-        t_https.peers[&2], "https://relay-2.relay:8080",
+        t_https.peers[&NodeId::new(2)],
+        "https://relay-2.relay:8080",
         "peers[2] has https scheme"
     );
 
@@ -113,15 +125,18 @@ fn topology_derives_https_scheme_and_peers_override() {
     let t_default = ClusterTopology::from_env("relay", "relay", 8080, "RELAY_PEERS")
         .expect("ClusterTopology::from_env should succeed");
     assert_eq!(
-        t_http.node_id, t_default.node_id,
+        t_http.node_id.get(),
+        t_default.node_id.get(),
         "node_id matches from_env"
     );
     assert_eq!(
-        t_http.membership.voters, t_default.membership.voters,
+        ids(t_http.membership.voters()),
+        ids(t_default.membership.voters()),
         "membership.voters matches from_env"
     );
     assert_eq!(
-        t_http.membership.learners, t_default.membership.learners,
+        ids(t_http.membership.learners()),
+        ids(t_default.membership.learners()),
         "membership.learners matches from_env"
     );
     assert_eq!(t_http.peers, t_default.peers, "peers matches from_env");
@@ -137,11 +152,13 @@ fn topology_derives_https_scheme_and_peers_override() {
                 "ClusterTopology::from_env_with_scheme with RELAY_PEERS and https should succeed",
             );
     assert_eq!(
-        t_override.peers[&0], "https://127.0.0.1:7101",
+        t_override.peers[&NodeId::new(0)],
+        "https://127.0.0.1:7101",
         "peers[0] uses RELAY_PEERS with https scheme"
     );
     assert_eq!(
-        t_override.peers[&2], "https://127.0.0.1:7103",
+        t_override.peers[&NodeId::new(2)],
+        "https://127.0.0.1:7103",
         "peers[2] uses RELAY_PEERS with https scheme"
     );
 
@@ -159,14 +176,18 @@ fn topology_derives_voter_learner_split() {
 
     let t = ClusterTopology::from_env_with_scheme("relay", "relay", 8080, "RELAY_PEERS", "http")
         .expect("ClusterTopology::from_env_with_scheme with voter/learner split should succeed");
-    assert_eq!(t.node_id, 2, "node_id is 2 for pod relay-2 from POD_NAME");
     assert_eq!(
-        t.membership.voters,
+        t.node_id.get(),
+        2,
+        "node_id is 2 for pod relay-2 from POD_NAME"
+    );
+    assert_eq!(
+        ids(t.membership.voters()),
         vec![0, 1],
         "membership.voters holds [0, 1] when VOTER_COUNT=2"
     );
     assert_eq!(
-        t.membership.learners,
+        ids(t.membership.learners()),
         vec![2],
         "membership.learners holds [2] when VOTER_COUNT=2 and REPLICAS_PER_SHARD=3"
     );
