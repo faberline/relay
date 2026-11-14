@@ -76,11 +76,6 @@ pub(crate) fn try_kubectl_json(args: &[&str]) -> Result<Value, String> {
     serde_json::from_str(&out).map_err(|err| format!("kubectl {}: not JSON: {err}", args.join(" ")))
 }
 
-/// [`try_kubectl_json`] that fails the test on a kubectl error.
-pub(crate) fn kubectl_json(args: &[&str]) -> Value {
-    try_kubectl_json(args).unwrap_or_else(|err| panic!("{err}"))
-}
-
 /// Polls `probe` every 2 seconds until it returns `Ok`, and fails the test
 /// with `what` after `timeout`. `probe` returns the last state it saw as the
 /// error, for the failure message.
@@ -210,9 +205,27 @@ impl Expected {
 
 /// Checks that exactly `want` live pods match `label`, that the one container
 /// of each runs the expected image, and that each runtime `imageID` binds it.
-/// Returns the image IDs.
+/// Returns the image IDs. Waits up to 120 seconds for the runtime to report
+/// each `imageID`: right after a pod starts, its `imageID` can still be empty.
 pub(crate) fn assert_pods_run(expected: &Expected, label: &str, want: u64) -> Vec<String> {
-    let pods = kubectl_json(&["get", "pods", "-l", label]);
+    wait_for(
+        &format!("pods with {label} run the expected image"),
+        Duration::from_secs(120),
+        || {
+            let pods = try_kubectl_json(&["get", "pods", "-l", label])?;
+            check_pods(expected, &pods, want)
+        },
+    )
+}
+
+/// The pure check behind [`assert_pods_run`]: `pods` is the parsed
+/// `kubectl get pods -l <label> -o json`. Returns the image IDs, or why the
+/// pods do not run the expected image yet.
+pub(crate) fn check_pods(
+    expected: &Expected,
+    pods: &Value,
+    want: u64,
+) -> Result<Vec<String>, String> {
     let live: Vec<&Value> = pods["items"]
         .as_array()
         .map(|all| {
@@ -221,27 +234,32 @@ pub(crate) fn assert_pods_run(expected: &Expected, label: &str, want: u64) -> Ve
                 .collect()
         })
         .unwrap_or_default();
-    assert_eq!(live.len() as u64, want, "pods with {label}");
+    if live.len() as u64 != want {
+        return Err(format!("{} live pods, want {want}", live.len()));
+    }
     live.iter()
         .map(|pod| {
             let pod_name = pod["metadata"]["name"].as_str().unwrap_or_default();
-            let container = only_container(&pod["spec"]);
-            assert_eq!(
-                container["image"],
-                expected.image.as_str(),
-                "pod {pod_name} image"
-            );
+            let image = only_container(&pod["spec"])["image"]
+                .as_str()
+                .unwrap_or_default();
+            if image != expected.image {
+                return Err(format!(
+                    "pod {pod_name} image {image}, want {}",
+                    expected.image
+                ));
+            }
             let image_id = pod["status"]["containerStatuses"][0]["imageID"]
                 .as_str()
                 .unwrap_or_default()
                 .to_owned();
-            assert!(
-                expected.binds(&image_id),
-                "pod {pod_name} runs imageID {image_id:?}, not {} or {}",
-                expected.root_digest,
-                expected.runtime_digest
-            );
-            image_id
+            if !expected.binds(&image_id) {
+                return Err(format!(
+                    "pod {pod_name} runs imageID {image_id:?}, not {} or {}",
+                    expected.root_digest, expected.runtime_digest
+                ));
+            }
+            Ok(image_id)
         })
         .collect()
 }
@@ -292,6 +310,96 @@ fn image_digest_reads_every_runtime_form() {
     }
     assert_eq!(image_digest("ghcr.io/faberline/relay:0.4.13"), None);
     assert_eq!(image_digest("sha256:ABC"), None);
+}
+
+fn expected_identity() -> Expected {
+    Expected {
+        version: "0.4.13".into(),
+        git_sha: "abcdef01".into(),
+        image: format!("ghcr.io/faberline/relay@sha256:{}", "a".repeat(64)),
+        root_digest: format!("sha256:{}", "a".repeat(64)),
+        runtime_digest: format!("sha256:{}", "b".repeat(64)),
+    }
+}
+
+/// `kubectl get pods -o json` for `count` pods that run `image`, each with
+/// the given container status `imageID` (omitted when `None`).
+fn pods_json(image: &str, image_id: Option<&str>, count: usize) -> Value {
+    let items: Vec<Value> = (0..count)
+        .map(|i| {
+            let mut status = json!({});
+            if let Some(id) = image_id {
+                status = json!({ "containerStatuses": [{ "imageID": id }] });
+            }
+            json!({
+                "metadata": { "name": format!("relay-{i}") },
+                "spec": { "containers": [{ "image": image }] },
+                "status": status,
+            })
+        })
+        .collect();
+    json!({ "items": items })
+}
+
+#[test]
+fn check_pods_waits_for_an_empty_image_id() {
+    let expected = expected_identity();
+    for image_id in [Some(""), None] {
+        let pods = pods_json(&expected.image, image_id, 3);
+        let err = check_pods(&expected, &pods, 3)
+            .expect_err("an empty imageID must be a retryable error");
+        assert!(err.contains("imageID \"\""), "{err}");
+    }
+}
+
+#[test]
+fn check_pods_accepts_a_bound_image_id() {
+    let expected = expected_identity();
+    for image_id in [
+        format!("ghcr.io/faberline/relay@sha256:{}", "b".repeat(64)),
+        format!("containerd://sha256:{}", "a".repeat(64)),
+    ] {
+        let pods = pods_json(&expected.image, Some(&image_id), 3);
+        let ids = check_pods(&expected, &pods, 3).expect("a bound imageID passes");
+        assert_eq!(ids, vec![image_id.clone(); 3], "{image_id}");
+    }
+}
+
+#[test]
+fn check_pods_rejects_the_wrong_digest() {
+    let expected = expected_identity();
+    let wrong = format!("ghcr.io/faberline/relay@sha256:{}", "c".repeat(64));
+    let pods = pods_json(&expected.image, Some(&wrong), 3);
+    let err = check_pods(&expected, &pods, 3).expect_err("a wrong digest must fail");
+    assert!(err.contains("not sha256:"), "{err}");
+}
+
+#[test]
+fn check_pods_rejects_wrong_count_and_wrong_image() {
+    let expected = expected_identity();
+    let bound = format!("ghcr.io/faberline/relay@sha256:{}", "b".repeat(64));
+    let pods = pods_json(&expected.image, Some(&bound), 2);
+    let err = check_pods(&expected, &pods, 3).expect_err("a wrong count must fail");
+    assert!(err.contains("2 live pods, want 3"), "{err}");
+
+    let wrong_image = format!("ghcr.io/faberline/relay@sha256:{}", "c".repeat(64));
+    let pods = pods_json(&wrong_image, Some(&bound), 3);
+    let err = check_pods(&expected, &pods, 3).expect_err("a wrong image must fail");
+    assert!(err.contains("image"), "{err}");
+}
+
+#[test]
+fn check_pods_does_not_count_a_terminating_pod() {
+    let expected = expected_identity();
+    let bound = format!("ghcr.io/faberline/relay@sha256:{}", "b".repeat(64));
+    let mut pods = pods_json(&expected.image, Some(&bound), 3);
+    let terminating = json!({
+        "metadata": { "name": "relay-old", "deletionTimestamp": "2026-11-12T00:00:00Z" },
+        "spec": { "containers": [{ "image": "ghcr.io/faberline/relay:old" }] },
+        "status": {},
+    });
+    pods["items"].as_array_mut().unwrap().push(terminating);
+    assert!(check_pods(&expected, &pods, 3).is_ok());
 }
 
 /// Guard against a GKE run that passes with `running 0 tests`: every suite
