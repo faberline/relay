@@ -10,7 +10,11 @@
 //!                                             headless + client Service,
 //!                                             PodDisruptionBudget
 //! ```
+//!
+//! Capacity decisions (CPU, memory and disk windows) are pure functions in
+//! [`capacity_policy`].
 
+pub mod capacity_policy;
 pub mod crd;
 pub mod reconcile;
 pub mod render;

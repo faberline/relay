@@ -1,6 +1,7 @@
 //! Bare `relay` (no subcommand): run the broker server — the former
 //! `relay-server` entrypoint, env-driven with flag overrides.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -137,8 +138,8 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
     // process lifetime — dropping it would abort the tick/pump tasks.
     let mut peer_transport = None;
     let raft = if raft_runtime::cluster::replica_mode() {
-        let transport = relay::tls::peer::PeerTlsConfig::from_env()?
-            .map(|config| config.peer_transport())
+        let transport = peer_tls::PeerTlsConfig::from_env(relay::tls::PEER_ENV_PREFIX)?
+            .map(|config| raft_runtime::PeerTransport::from_config(&config))
             .transpose()?;
         let (peer_port, peer_scheme) =
             raft_peer_endpoint(&bind, args.raft_port, transport.is_some())?;
@@ -200,11 +201,16 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
         (Some(raft), Some(_)) => Some(raft.router()),
         _ => None,
     };
+    // TLS on the public listener when RELAY_TLS_CERT and RELAY_TLS_KEY are both
+    // set; a partial pair stops the start here (#136).
+    let public_tls = relay::tls::public::PublicTlsConfig::from_env()?;
     let listener = tokio::net::TcpListener::bind(&bind).await?;
-    tracing::info!(
-        addr = %listener.local_addr()?,
-        "relay listening (HTTP/1.1 + HTTP/2 cleartext)"
-    );
+    let scheme = if public_tls.is_some() {
+        "HTTPS (HTTP/1.1 + HTTP/2 over TLS)"
+    } else {
+        "HTTP/1.1 + HTTP/2 cleartext"
+    };
+    tracing::info!(addr = %listener.local_addr()?, "relay listening ({scheme})");
 
     let peer_server = match (peer_transport, peer_router) {
         (Some(transport), Some(router)) => {
@@ -228,12 +234,20 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
     // service shell: `start_drain` flips `/readyz` to 503 for the grace window
     // before the listener closes.
     let grace = Duration::from_secs(args.grace_secs);
-    service_http::serve(
-        listener,
-        app,
-        service_http::shutdown_with_drain(move || state.start_drain(), grace),
-    )
-    .await;
+    let shutdown = service_http::shutdown_with_drain(move || state.start_drain(), grace);
+    match public_tls {
+        Some(tls) => {
+            let server = Arc::new(tls.rustls_server_config()?);
+            service_http::serve_tls(
+                listener,
+                app,
+                service_http::config_source(move || Some(server.clone())),
+                shutdown,
+            )
+            .await;
+        }
+        None => service_http::serve(listener, app, shutdown).await,
+    }
     if let Some((shutdown, serve)) = peer_server {
         let _ = shutdown.send(());
         serve.await.context("relay peer listener task")??;

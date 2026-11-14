@@ -288,10 +288,10 @@ fn in_process_raft_convergence() {
             4,
             "node {id} at index 3 applied 4 entries before drop"
         );
-        for idx in 0..4 {
+        for (idx, raw) in c.applied[&id].iter().enumerate().take(4) {
             assert_eq!(
-                c.applied[&id][idx],
-                cmd(idx),
+                raw,
+                &cmd(idx),
                 "node {id} at index {idx} holds message m{idx} in proposal order"
             );
         }
@@ -319,17 +319,17 @@ fn in_process_raft_convergence() {
             7,
             "node {id} at index 6 has all 7 applied entries"
         );
-        for idx in 0..4 {
+        for (idx, raw) in c.applied[&id].iter().enumerate().take(4) {
             assert_eq!(
-                c.applied[&id][idx],
-                cmd(idx),
+                raw,
+                &cmd(idx),
                 "node {id} at index {idx} preserved pre-drop committed message m{idx}"
             );
         }
-        for idx in 4..7 {
+        for (idx, raw) in c.applied[&id].iter().enumerate().skip(4).take(3) {
             assert_eq!(
-                c.applied[&id][idx],
-                cmd(idx),
+                raw,
+                &cmd(idx),
                 "node {id} at index {idx} committed post-drop message m{idx}"
             );
         }
