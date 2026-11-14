@@ -122,7 +122,7 @@ metric today: use `kubectl` and `/readyz` for those.
 
 ## Alert: RelayLeaseReclaiming
 
-- Symptom: the alert `RelayLeaseReclaiming` from `k8s/components/observability/prometheusrule.yaml` fires. Its rule is `increase(relay_requests_total{route=~".*lease.*",status=~"5.."}[5m]) > 0`, held for 5 minutes.
+- Symptom: the alert `RelayLeaseReclaiming` from `k8s/components/observability/prometheusrule.yaml` fires. Its rule is `increase(relay_lease_errors_total[5m]) > 0`, held for 5 minutes.
 - Check: `kubectl -n relay logs relay-0 --tail=100`, and `kubectl -n relay get pods`. Look for a node that is down or a leader change.
 - Command: `kubectl -n relay get pods`
 - Expected: all pods are `Ready`. Once the leader is back, the alert clears within 5 minutes.
