@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use raft_runtime::Membership;
+use raft_runtime::{Membership, NodeId};
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa,
     KeyPair,
@@ -58,12 +58,7 @@ fn material_with_trust(identity_ca: &Authority, trust_ca: &Authority) -> Materia
     std::fs::write(&ca_path, trust_ca.cert.pem()).unwrap();
     Material {
         _dir: dir,
-        config: peer_tls::PeerTlsConfig {
-            cert: cert_path,
-            key: key_path,
-            ca: ca_path,
-            required: true,
-        },
+        config: peer_tls::PeerTlsConfig::new(cert_path, key_path, ca_path, true),
     }
 }
 
@@ -93,16 +88,13 @@ async fn trusted_relay_peers_replicate_messages_over_mtls() {
         );
         listeners.push(listener);
     }
-    let membership = Membership {
-        voters: vec![0, 1, 2],
-        learners: vec![],
-    };
+    let membership = Membership::new(vec![NodeId::new(0), NodeId::new(1), NodeId::new(2)], vec![]);
     let mut nodes = Vec::new();
     for (id, listener) in listeners.into_iter().enumerate() {
         let peers = urls
             .iter()
             .filter(|(peer, _)| **peer != id as u64)
-            .map(|(peer, url)| (*peer, url.clone()))
+            .map(|(peer, url)| (NodeId::new(*peer), url.clone()))
             .collect();
         let transport = raft_runtime::PeerTransport::from_config(&material.config).unwrap();
         let dir = tempfile::tempdir().unwrap();
@@ -111,7 +103,7 @@ async fn trusted_relay_peers_replicate_messages_over_mtls() {
             RelayRaft::spawn_with_peer_transport(
                 engine.clone(),
                 dir.path(),
-                id as u64,
+                NodeId::new(id as u64),
                 membership.clone(),
                 peers,
                 RelayRaft::host_config(8),
