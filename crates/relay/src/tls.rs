@@ -156,12 +156,10 @@ hL1jkBLctkVegPUy9dOXVF0=
         };
         match scenario.as_str() {
             "none" => assert!(PeerTlsConfig::from_env(PEER_ENV_PREFIX).unwrap().is_none()),
-            "all" => assert!(
-                PeerTlsConfig::from_env(PEER_ENV_PREFIX)
-                    .unwrap()
-                    .unwrap()
-                    .required
-            ),
+            "all" => assert!(PeerTlsConfig::from_env(PEER_ENV_PREFIX)
+                .unwrap()
+                .unwrap()
+                .required()),
             "partial" => assert!(PeerTlsConfig::from_env(PEER_ENV_PREFIX)
                 .unwrap_err()
                 .to_string()
@@ -189,12 +187,12 @@ hL1jkBLctkVegPUy9dOXVF0=
         std::fs::write(dir.join("cert.pem"), TEST_CERT).unwrap();
         std::fs::write(dir.join("key.pem"), TEST_KEY).unwrap();
         std::fs::write(dir.join("ca.pem"), TEST_CERT).unwrap();
-        PeerTlsConfig {
-            cert: dir.join("cert.pem"),
-            key: dir.join("key.pem"),
-            ca: dir.join("ca.pem"),
-            required: true,
-        }
+        PeerTlsConfig::new(
+            dir.join("cert.pem"),
+            dir.join("key.pem"),
+            dir.join("ca.pem"),
+            true,
+        )
     }
 
     /// R3: nothing set => `Ok(None)` (plain h2c peers, today's default).
@@ -268,7 +266,7 @@ hL1jkBLctkVegPUy9dOXVF0=
             .expect("server config should build");
         cfg.rustls_client_config()
             .expect("client config should build");
-        std::fs::remove_dir_all(cfg.cert.parent().unwrap()).ok();
+        std::fs::remove_dir_all(cfg.cert().parent().unwrap()).ok();
     }
 
     fn assert_credential_free_err<T: std::fmt::Debug>(res: Result<T>) {
@@ -334,45 +332,45 @@ hL1jkBLctkVegPUy9dOXVF0=
     #[test]
     fn non_pem_cert_file_fails_rustls_configs() {
         let cfg = write_tls_fixture("bad-cert");
-        std::fs::write(&cfg.cert, b"NOT_A_PEM_CERT").unwrap();
+        std::fs::write(cfg.cert(), b"NOT_A_PEM_CERT").unwrap();
         assert_credential_free_err(cfg.rustls_server_config());
         assert_credential_free_err(cfg.rustls_client_config());
-        std::fs::remove_dir_all(cfg.cert.parent().unwrap()).ok();
+        std::fs::remove_dir_all(cfg.cert().parent().unwrap()).ok();
     }
 
     #[test]
     fn non_pem_key_file_fails_rustls_configs() {
         let cfg = write_tls_fixture("bad-key");
-        std::fs::write(&cfg.key, b"NOT_A_PEM_KEY").unwrap();
+        std::fs::write(cfg.key(), b"NOT_A_PEM_KEY").unwrap();
         assert_credential_free_err(cfg.rustls_server_config());
         assert_credential_free_err(cfg.rustls_client_config());
-        std::fs::remove_dir_all(cfg.cert.parent().unwrap()).ok();
+        std::fs::remove_dir_all(cfg.cert().parent().unwrap()).ok();
     }
 
     #[test]
     fn non_pem_ca_file_fails_rustls_configs() {
         let cfg = write_tls_fixture("bad-ca");
-        std::fs::write(&cfg.ca, b"NOT_A_PEM_CA").unwrap();
+        std::fs::write(cfg.ca(), b"NOT_A_PEM_CA").unwrap();
         assert_credential_free_err(cfg.rustls_server_config());
         assert_credential_free_err(cfg.rustls_client_config());
-        std::fs::remove_dir_all(cfg.cert.parent().unwrap()).ok();
+        std::fs::remove_dir_all(cfg.cert().parent().unwrap()).ok();
     }
 
     #[test]
     fn mismatched_key_returns_err_from_rustls_server_config() {
         let cfg = write_tls_fixture("mismatched-key");
-        std::fs::write(&cfg.key, TEST_KEY_2).unwrap();
+        std::fs::write(cfg.key(), TEST_KEY_2).unwrap();
         assert_credential_free_err(cfg.rustls_server_config());
-        std::fs::remove_dir_all(cfg.cert.parent().unwrap()).ok();
+        std::fs::remove_dir_all(cfg.cert().parent().unwrap()).ok();
     }
 
     #[test]
     fn empty_ca_file_returns_err() {
         let cfg = write_tls_fixture("empty-ca");
-        std::fs::write(&cfg.ca, b"").unwrap();
+        std::fs::write(cfg.ca(), b"").unwrap();
         assert_credential_free_err(cfg.rustls_server_config());
         assert_credential_free_err(cfg.rustls_client_config());
-        std::fs::remove_dir_all(cfg.cert.parent().unwrap()).ok();
+        std::fs::remove_dir_all(cfg.cert().parent().unwrap()).ok();
     }
 
     /// The prefix must keep relay's `RELAY_PEER_*` env contract.
