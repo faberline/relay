@@ -70,4 +70,5 @@ upgrade is checked by the GKE run of issue #137.
 The tests `compat::openapi_operations_are_not_removed` and
 `compat::on_disk_log_format_is_stable` (in `crates/relay/tests/it/compat.rs`)
 pin the served API and the on-disk log format. They fail when an operation is
-removed or a log frame field changes; added paths and fields still pass.
+removed, or when a log frame field is added, removed or renamed; added API
+paths still pass.

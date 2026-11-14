@@ -1,9 +1,9 @@
 //! Compatibility pins (issue #173). They fail on a breaking change to two
 //! things that clients and operators depend on: the operations of the served
 //! HTTP API (the same document as `relay spec` and `/openapi.json`) and the
-//! on-disk log format. Additive changes pass: a new path or a new field does
-//! not fail these tests. Removing an operation, or changing the file name or
-//! the frame payload fields of the log, does fail them.
+//! on-disk log format. Adding an API path passes. Removing an operation fails,
+//! and so does any change to the segment file name or to the set of frame
+//! payload fields (added or removed).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::Command;
