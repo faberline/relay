@@ -17,6 +17,7 @@ How to run, configure, and test relay.
 | [restart-failover-soak.md](restart-failover-soak.md) | The restart, persistence, backup and bounded soak gate (`scripts/verify-restart-failover-soak.sh`) and its last recorded result. |
 | [container-kustomize-verification.md](container-kustomize-verification.md) | The offline gate for the container and Kustomize artifacts and its last result. |
 | [competitor-efficiency.md](competitor-efficiency.md) | The local competitor semantics and efficiency gate (`scripts/verify-competitor-efficiency.sh`) and its last recorded result. |
+| [core-reuse.md](core-reuse.md) | The S4 core-reuse check (CR0 to CR8) for relay: the result, the date and the command. |
 
 ## Tests
 
