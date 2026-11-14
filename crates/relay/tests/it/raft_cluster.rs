@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use raft_runtime::Membership;
+use raft_runtime::{Membership, NodeId};
 use relay::{PubCommand, Relay, RelayCoreConfig, RelayRaft};
 
 static CLUSTER_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -61,10 +61,7 @@ impl Cluster {
         Cluster {
             urls,
             listeners,
-            membership: Membership {
-                voters: (0..n).collect(),
-                learners: vec![],
-            },
+            membership: Membership::new((0..n).map(NodeId::new).collect(), vec![]),
             nodes: (0..n).map(|_| None).collect(),
             _dirs: (0..n).map(|_| tempfile::tempdir().unwrap()).collect(),
             client: reqwest::Client::builder()
@@ -86,17 +83,17 @@ impl Cluster {
                 .into_owned(),
             ..RelayCoreConfig::default()
         }));
-        let peers: HashMap<u64, String> = self
+        let peers: HashMap<NodeId, String> = self
             .urls
             .iter()
             .filter(|(k, _)| **k != id as u64)
-            .map(|(k, v)| (*k, v.clone()))
+            .map(|(k, v)| (NodeId::new(*k), v.clone()))
             .collect();
         let raft = Arc::new(
             RelayRaft::spawn(
                 engine,
                 &self._dirs[id].path().join("raft"),
-                id as u64,
+                NodeId::new(id as u64),
                 self.membership.clone(),
                 peers,
                 RelayRaft::host_config(snapshot_every),
@@ -421,7 +418,7 @@ async fn fresh_node_catches_up_via_install_snapshot() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert!(
-        c.raft(2).applied_index() >= 20,
+        c.raft(2).applied_index().get() >= 20,
         "snapshot restore set the applied floor"
     );
     let got = c.message_ids(2);

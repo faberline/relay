@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use raft_runtime::Membership;
+use raft_runtime::{Membership, NodeId};
 use relay::{PubCommand, Relay, RelayCoreConfig, RelayRaft};
 
 static CLUSTER_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -47,10 +47,10 @@ impl Cluster {
         Cluster {
             urls,
             listeners,
-            membership: Membership {
-                voters: (0..voters).collect(),
-                learners: (voters..total).collect(),
-            },
+            membership: Membership::new(
+                (0..voters).map(NodeId::new).collect(),
+                (voters..total).map(NodeId::new).collect(),
+            ),
             nodes: (0..total).map(|_| None).collect(),
             _dirs: (0..total).map(|_| tempfile::tempdir().unwrap()).collect(),
         }
@@ -69,17 +69,17 @@ impl Cluster {
                 .into_owned(),
             ..RelayCoreConfig::default()
         }));
-        let peers: HashMap<u64, String> = self
+        let peers: HashMap<NodeId, String> = self
             .urls
             .iter()
             .filter(|(k, _)| **k != id as u64)
-            .map(|(k, v)| (*k, v.clone()))
+            .map(|(k, v)| (NodeId::new(*k), v.clone()))
             .collect();
         let raft = Arc::new(
             RelayRaft::spawn(
                 engine,
                 &self._dirs[id].path().join("raft"),
-                id as u64,
+                NodeId::new(id as u64),
                 self.membership.clone(),
                 peers,
                 RelayRaft::host_config(snapshot_every),

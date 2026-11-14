@@ -137,7 +137,7 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
     // traffic, tokenless like probes; mTLS is a later slice). Held for the
     // process lifetime — dropping it would abort the tick/pump tasks.
     let mut peer_transport = None;
-    let raft = if raft_runtime::cluster::replica_mode() {
+    let raft = if raft_runtime::replica_mode() {
         let transport = peer_tls::PeerTlsConfig::from_env(relay::tls::PEER_ENV_PREFIX)?
             .map(|config| raft_runtime::PeerTransport::from_config(&config))
             .transpose()?;
@@ -170,9 +170,9 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
         state.set_raft(std::sync::Arc::clone(&raft));
         peer_transport = transport;
         tracing::info!(
-            node_id = topo.node_id,
+            node_id = topo.node_id.get(),
             replicas = topo.replicas_per_shard,
-            voters = topo.membership.voters.len(),
+            voters = topo.membership.voters().len(),
             peer_scheme,
             peer_port,
             "raft: replica/HA mode — all queue mutations replicate"
