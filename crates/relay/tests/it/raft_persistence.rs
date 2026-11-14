@@ -65,23 +65,26 @@ async fn restart_rejoins_with_applied_state_intact() {
             let (_, out) = raft.publish(&cmd(&format!("m{i}"))).await.unwrap();
             assert!(!out.expect("outcome").deduped);
         }
-        assert_eq!(raft.applied_index().get(), 3);
+        // core v0.5.0: new leader appends a Noop entry (index 1), so 3 publishes end at 4.
+        assert_eq!(raft.applied_index().get(), 4);
         assert_eq!(engine.log_len("s").unwrap(), 3);
     } // drop = restart (host tasks abort; engine files stay)
 
     let engine = disk_engine(dir.path(), 134_217_728);
     let raft = spawn(engine.clone(), dir.path());
     // The marker survived: the floor is back before any replay runs.
-    assert_eq!(raft.applied_index().get(), 3, "applied floor recovered");
+    // core v0.5.0: new leader appends a Noop entry (index 5) after restart.
+    assert_eq!(raft.applied_index().get(), 4, "applied floor recovered");
     assert_eq!(
         engine.log_len("s").unwrap(),
         3,
         "no double-apply on restart"
     );
 
-    // The group resumes: the next publish lands at raft index 4 / engine seq 3.
+    // The group resumes: the next publish lands at raft index 6 / engine seq 3.
+    // core v0.5.0: the Noop after restart takes index 5.
     let (idx, out) = raft.publish(&cmd("m99")).await.unwrap();
-    assert_eq!(idx.get(), 4);
+    assert_eq!(idx.get(), 6);
     let out = out.expect("outcome");
     assert!(!out.deduped);
     assert_eq!(out.seq, 3);
@@ -113,13 +116,15 @@ async fn acked_work_is_not_resurrected_by_cold_replay() {
 
     let engine = disk_engine(dir.path(), 1);
     let raft = spawn(engine.clone(), dir.path());
-    assert_eq!(raft.applied_index().get(), 5, "applied floor recovered");
+    // core v0.5.0: new leader appends a Noop entry (index 1), then 5 publishes end at 6.
+    assert_eq!(raft.applied_index().get(), 6, "applied floor recovered");
 
     // A new-term publish forces the recovered backlog to (re-)commit; the
-    // floor makes replay skip entries 1..=5. Without it, m0..m3 (trimmed from
+    // floor makes replay skip entries 1..=6. Without it, m0..m3 (trimmed from
     // disk and dedupe) would re-append here and log_len would exceed 6.
+    // core v0.5.0: the Noop after restart takes index 7, so the publish is 8.
     let (idx, out) = raft.publish(&cmd("m100")).await.unwrap();
-    assert_eq!(idx.get(), 6);
+    assert_eq!(idx.get(), 8);
     assert!(!out.expect("outcome").deduped);
     assert_eq!(
         engine.log_len("s").unwrap(),
