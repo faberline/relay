@@ -378,4 +378,67 @@ async fn real_relay_binary_recovers_unacked_after_restart() {
         .expect("parse empty lease response");
     assert!(empty_resp.lease.is_none(), "backlog is fully consumed");
 }
+
+fn batch_of(n: usize) -> Vec<(String, serde_json::Value, BTreeMap<String, String>, u8)> {
+    (0..n).map(|i| item(&format!("m{i}"))).collect()
+}
+
+#[test]
+fn always_batch_of_100_does_one_sync() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = disk_config(dir.path());
+    cfg.fsync = FsyncPolicy::Always;
+    let mut log = relay::Log::open(&cfg, "q", 0).unwrap();
+    let before = log.sync_count();
+    log.append_many(batch_of(100), Utc::now()).unwrap();
+    assert_eq!(log.sync_count() - before, 1, "one batch is one sync");
+    drop(log);
+    let reopened = relay::Log::open(&cfg, "q", 0).unwrap();
+    assert_eq!(reopened.len(), 100, "all 100 entries survive a reopen");
+}
+
+#[test]
+fn always_single_append_syncs_once_per_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = disk_config(dir.path());
+    cfg.fsync = FsyncPolicy::Always;
+    let mut log = relay::Log::open(&cfg, "q", 0).unwrap();
+    let before = log.sync_count();
+    for i in 0..3 {
+        log.append(
+            &format!("a{i}"),
+            json!({ "i": i }),
+            BTreeMap::new(),
+            Utc::now(),
+        )
+        .unwrap();
+    }
+    assert_eq!(log.sync_count() - before, 3, "one sync per append");
+    drop(log);
+    let reopened = relay::Log::open(&cfg, "q", 0).unwrap();
+    assert_eq!(reopened.len(), 3, "acknowledged entries are durable");
+}
+
+#[test]
+fn interval_batch_does_one_sync_and_os_batch_none() {
+    let dir_i = tempfile::tempdir().unwrap();
+    let mut cfg_i = disk_config(dir_i.path());
+    cfg_i.fsync = FsyncPolicy::Interval;
+    let mut log_i = relay::Log::open(&cfg_i, "q", 0).unwrap();
+    let before_i = log_i.sync_count();
+    log_i.append_many(batch_of(100), Utc::now()).unwrap();
+    assert_eq!(
+        log_i.sync_count() - before_i,
+        1,
+        "Interval: one sync per batch"
+    );
+
+    let dir_o = tempfile::tempdir().unwrap();
+    let mut cfg_o = disk_config(dir_o.path());
+    cfg_o.fsync = FsyncPolicy::Os;
+    let mut log_o = relay::Log::open(&cfg_o, "q", 0).unwrap();
+    let before_o = log_o.sync_count();
+    log_o.append_many(batch_of(100), Utc::now()).unwrap();
+    assert_eq!(log_o.sync_count() - before_o, 0, "Os: no sync from relay");
+}
 // HANDWRITE-END
