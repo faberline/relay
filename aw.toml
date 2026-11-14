@@ -163,3 +163,7 @@ content_digest = "sha256:30ccedbe3f8baaf10e8f8d3b016f2624c931c7537887cef2a448738
 command = "vat run meter-perf"
 category = "efficiency"
 # AW-EC-END
+
+[standards.coverage]
+line = 76.28
+target = 100
