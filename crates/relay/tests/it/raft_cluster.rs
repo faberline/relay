@@ -146,9 +146,16 @@ impl Cluster {
     /// Abort the node's serve loop and drop its host (tick/pump abort on drop).
     async fn kill(&mut self, id: usize) {
         if let Some(mut n) = self.nodes[id].take() {
-            n.shutdown.take();
-            n.serve.abort();
-            let _ = n.serve.await;
+            if let Some(tx) = n.shutdown.take() {
+                let _ = tx.send(());
+            }
+            if tokio::time::timeout(Duration::from_secs(2), &mut n.serve)
+                .await
+                .is_err()
+            {
+                n.serve.abort();
+                let _ = n.serve.await;
+            }
             n.raft.shutdown().await.unwrap();
         }
     }
@@ -956,6 +963,59 @@ async fn rolling_restart_keeps_all_acked_messages() {
             want,
             "node {id} holds m0..m19 in order after the rolling restart"
         );
+    }
+    c.shutdown().await;
+}
+
+/// A full rolling restart of all three voters must not leave the last restarted
+/// voter behind: every live node reaches the same applied index and holds all
+/// four messages after one more publish.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rolling_restart_last_voter_catches_up() {
+    let _guard = CLUSTER_TEST_LOCK.lock().await;
+    let mut c = Cluster::prepare(3).await;
+    c.start_all(1024);
+    let leader = c.wait_leader().await;
+    for i in 0..3 {
+        c.raft(leader)
+            .publish(&cmd(&format!("m{i}")))
+            .await
+            .unwrap();
+    }
+    c.wait_converged(3).await;
+    for id in 0..3usize {
+        c.kill(id).await;
+        c.start_node(id, 1024);
+    }
+    let writer = c.wait_leader().await;
+    c.raft(writer).publish(&cmd("m3")).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let states: Vec<(usize, u64, u64)> = c
+            .live()
+            .map(|(id, n)| {
+                (
+                    id,
+                    n.raft.applied_index().get(),
+                    n.raft.relay().log_len("s").unwrap(),
+                )
+            })
+            .collect();
+        let applied = states[0].1;
+        if states.iter().all(|&(_, a, l)| l == 4 && a == applied) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let (id, a, l) = states
+                .iter()
+                .copied()
+                .find(|&(_, a, l)| l != 4 || a != applied)
+                .expect("a node is not caught up");
+            panic!(
+                "rolling restart: node {id} (applied_index, log_len) ({a}, {l}) not caught up; all live nodes {states:?}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
     c.shutdown().await;
 }
