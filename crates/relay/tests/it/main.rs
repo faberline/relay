@@ -25,6 +25,7 @@ mod log_format;
 mod measured_performance;
 mod multi_shard;
 mod operator;
+mod ordered_log_raft_breadth;
 mod ownership_contract;
 mod perf_gate;
 mod priority;
