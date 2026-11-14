@@ -433,10 +433,7 @@ impl Group {
         Group {
             urls,
             listeners,
-            membership: Membership {
-                voters: (0..n).collect(),
-                learners: vec![],
-            },
+            membership: Membership::new((0..n).map(NodeId::new).collect(), vec![]),
             nodes: (0..n).map(|_| None).collect(),
             dirs: (0..n).map(|_| tempfile::tempdir().unwrap()).collect(),
         }
@@ -452,17 +449,17 @@ impl Group {
                 .into_owned(),
             ..RelayCoreConfig::default()
         }));
-        let peers: HashMap<u64, String> = self
+        let peers: HashMap<NodeId, String> = self
             .urls
             .iter()
             .filter(|(k, _)| **k != id as u64)
-            .map(|(k, v)| (*k, v.clone()))
+            .map(|(k, v)| (NodeId::new(*k), v.clone()))
             .collect();
         let raft = Arc::new(
             RelayRaft::spawn(
                 engine,
                 &self.dirs[id].path().join("raft"),
-                id as u64,
+                NodeId::new(id as u64),
                 self.membership.clone(),
                 peers,
                 RelayRaft::host_config(1024),
@@ -564,7 +561,10 @@ impl Group {
     async fn wait_converged(&self, want: u64) {
         let deadline = Instant::now() + DEADLINE;
         loop {
-            let applied: Vec<u64> = self.live().map(|(_, n)| n.raft.applied_index()).collect();
+            let applied: Vec<u64> = self
+                .live()
+                .map(|(_, n)| n.raft.applied_index().get())
+                .collect();
             let logs_ok = self
                 .live()
                 .all(|(_, n)| n.raft.relay().log_len("s").unwrap() >= want);
