@@ -170,9 +170,7 @@ fn status_patch_follows_each_transition() {
         let generation = i as i64 + 2;
         let mut relay = Relay::new("relay", spec(1, next));
         relay.metadata.generation = Some(generation);
-        let ready = ReadyFacts {
-            ready: HashMap::from([("relay".to_string(), i64::from(prev))]),
-        };
+        let ready = ReadyFacts::new(HashMap::from([("relay".to_string(), i64::from(prev))]));
         let patch = relay.status_patch(&ready);
         let status = &patch["status"];
         assert_eq!(status["desiredReplicas"], next, "step {i}: desired");
@@ -186,9 +184,7 @@ fn status_patch_follows_each_transition() {
     }
 
     let relay = Relay::new("relay", spec(1, 3));
-    let patch = relay.status_patch(&ReadyFacts {
-        ready: HashMap::new(),
-    });
+    let patch = relay.status_patch(&ReadyFacts::new(HashMap::new()));
     assert_eq!(
         patch["status"]["phase"], "Pending",
         "no ready pods must be Pending"

@@ -310,24 +310,22 @@ fn status_patch_reports_phases() {
 
     let targets = relay.readiness_targets();
     assert_eq!(targets.len(), 1);
-    assert_eq!(targets[0].kind, "StatefulSet");
-    assert_eq!(targets[0].name, "relay");
+    assert_eq!(targets[0].kind(), "StatefulSet");
+    assert_eq!(targets[0].name(), "relay");
 
     let mut all_ready = HashMap::new();
     all_ready.insert("relay".to_string(), 3i64);
-    let status = relay.status_patch(&ReadyFacts { ready: all_ready });
+    let status = relay.status_patch(&ReadyFacts::new(all_ready));
     assert_eq!(status["status"]["phase"], "Ready");
     assert_eq!(status["status"]["desiredReplicas"], 3);
     assert_eq!(status["status"]["readyReplicas"], 3);
 
     let mut partial = HashMap::new();
     partial.insert("relay".to_string(), 1i64);
-    let status = relay.status_patch(&ReadyFacts { ready: partial });
+    let status = relay.status_patch(&ReadyFacts::new(partial));
     assert_eq!(status["status"]["phase"], "Reconciling");
 
-    let status = relay.status_patch(&ReadyFacts {
-        ready: HashMap::new(),
-    });
+    let status = relay.status_patch(&ReadyFacts::new(HashMap::new()));
     assert_eq!(status["status"]["phase"], "Pending");
 }
 

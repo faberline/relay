@@ -790,7 +790,7 @@ pub async fn admin_backup(
     }
     let applied = match st.raft() {
         Some(raft) => raft.applied_index(),
-        None => 0,
+        None => Default::default(),
     };
     match relay_replication::raft::snapshot_bytes(&st.relay, applied) {
         Ok(bytes) => (

@@ -23,14 +23,10 @@ pub(crate) struct UpgradeArgs {
 
 /// `relay upgrade` — self-update from a published GitHub release.
 pub(crate) async fn run(args: UpgradeArgs) -> Result<()> {
-    cli_std::upgrade::run(
-        &TOOL,
-        cli_std::upgrade::Options {
-            check: args.check,
-            tag: args.tag,
-            force: args.force,
-            yes: args.yes,
-        },
-    )
-    .await
+    let opts = cli_std::upgrade::Options::default()
+        .with_check(args.check)
+        .with_tag(args.tag)
+        .with_force(args.force)
+        .with_yes(args.yes);
+    cli_std::upgrade::run(&TOOL, opts).await
 }

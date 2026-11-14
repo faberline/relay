@@ -56,8 +56,8 @@ fn segments_are_core_frames() {
     let first = dir.path().join("s__shard0__0.frames");
     let read = storage_durable::FramedLogReader::read_frames(&first, 0).unwrap();
     assert!(!read.is_empty(), "first segment holds frames");
-    assert_eq!(read[0].seq, 1);
-    let payload: serde_json::Value = serde_json::from_slice(&read[0].payload).unwrap();
+    assert_eq!(read[0].seq(), 1);
+    let payload: serde_json::Value = serde_json::from_slice(read[0].payload()).unwrap();
     assert!(
         payload.is_object() && payload.get("message_id").is_some(),
         "frame payload is one JSON entry: {payload}"

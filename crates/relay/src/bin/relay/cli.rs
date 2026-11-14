@@ -408,11 +408,11 @@ mod tests {
     /// stamped fallback outside a git checkout).
     #[test]
     fn toolinfo_is_stamped() {
-        assert_eq!(TOOL.project, "relay");
-        assert!(!TOOL.version.is_empty());
-        assert!(!TOOL.target.is_empty());
-        assert!(!TOOL.git_sha.is_empty());
-        assert!(!TOOL.built_at.is_empty());
+        assert_eq!(TOOL.project(), "relay");
+        assert!(!TOOL.version().is_empty());
+        assert!(!TOOL.target().is_empty());
+        assert!(!TOOL.git_sha().is_empty());
+        assert!(!TOOL.built_at().is_empty());
     }
 
     /// #2556: the body-limit-bytes flag defaults to 8 MiB and respects the
