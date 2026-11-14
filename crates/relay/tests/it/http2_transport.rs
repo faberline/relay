@@ -589,6 +589,7 @@ async fn metrics_report_relay_request_counters_after_traffic() {
     assert!(body.contains("relay_publish_requests_total 2"));
     assert!(body.contains("relay_publish_latency_ms_count 2"));
     assert!(body.contains("relay_lease_requests_total 0"));
+    assert!(body.contains("relay_lease_errors_total 0"));
 }
 
 /// #1205 AC4: error paths render the shared `{error, message}` envelope —
