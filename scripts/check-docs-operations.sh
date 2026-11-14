@@ -4,7 +4,8 @@
 set -euo pipefail
 
 NEW_DOCS=(docs/operations/install.md docs/operations/runbook.md)
-LINKED_FILES=(docs/operations/install.md docs/operations/runbook.md docs/operations/README.md README.md)
+PAGES=(docs/security/threat-model.md docs/operations/configuration.md docs/operations/limits.md)
+LINKED_FILES=(docs/operations/install.md docs/operations/runbook.md docs/operations/README.md README.md "${PAGES[@]}")
 RUNBOOK=docs/operations/runbook.md
 ALLOWED_VERBS="llm upgrade issue k8s dockerfile spec backup"
 failures=0
@@ -14,8 +15,8 @@ fail() {
   failures=$((failures + 1))
 }
 
-# 1. The two new documents exist.
-for f in "${NEW_DOCS[@]}"; do
+# 1. The new documents and the three operator pages exist.
+for f in "${NEW_DOCS[@]}" "${PAGES[@]}"; do
   if [ -f "$f" ]; then
     echo "ok: $f exists"
   else
@@ -23,9 +24,9 @@ for f in "${NEW_DOCS[@]}"; do
   fi
 done
 
-# 2. The runbook has the seven sections, each with the four bullets.
+# 2. The runbook has the eight sections, each with the four bullets.
 if [ -f "$RUNBOOK" ]; then
-  for h in "Node down" "Leader failover" "Disk full" "Backup" "Restore" "Drain" "Upgrade"; do
+  for h in "Node down" "Leader failover" "Disk full" "Backup" "Restore" "Drain" "Upgrade" "Alert: RelayLeaseReclaiming"; do
     if ! grep -qx "## $h" "$RUNBOOK"; then
       fail "$RUNBOOK lacks the heading '## $h'"
       continue
@@ -46,6 +47,9 @@ fi
 if [ -f docs/operations/README.md ]; then
   grep -q "(install.md)" docs/operations/README.md || fail "docs/operations/README.md lacks (install.md)"
   grep -q "(runbook.md)" docs/operations/README.md || fail "docs/operations/README.md lacks (runbook.md)"
+  grep -q "(configuration.md)" docs/operations/README.md || fail "docs/operations/README.md lacks (configuration.md)"
+  grep -q "(limits.md)" docs/operations/README.md || fail "docs/operations/README.md lacks (limits.md)"
+  grep -q "(../security/threat-model.md)" docs/operations/README.md || fail "docs/operations/README.md lacks (../security/threat-model.md)"
 fi
 if [ -f README.md ]; then
   grep -q "docs/operations/install.md" README.md || fail "README.md lacks the link docs/operations/install.md"
@@ -67,7 +71,7 @@ for file in "${LINKED_FILES[@]}"; do
 done
 
 # 5. Repository paths written in backticks in the new documents exist.
-for file in "${NEW_DOCS[@]}"; do
+for file in "${NEW_DOCS[@]}" "${PAGES[@]}"; do
   [ -f "$file" ] || continue
   while IFS= read -r p; do
     if [ ! -e "$p" ]; then
@@ -78,7 +82,7 @@ for file in "${NEW_DOCS[@]}"; do
 done
 
 # 6. Every `relay <verb>` in the new documents is a verb of relay --help.
-for file in "${NEW_DOCS[@]}"; do
+for file in "${NEW_DOCS[@]}" "${PAGES[@]}"; do
   [ -f "$file" ] || continue
   while IFS= read -r verb; do
     case " $ALLOWED_VERBS " in
@@ -88,6 +92,24 @@ for file in "${NEW_DOCS[@]}"; do
   done < <( { grep -o '`relay [^`]*`' "$file" | tr -d '`'; grep -E '^[[:space:]]*(\$ )?relay ' "$file"; } \
             | awk '{ for (i = 1; i < NF; i++) if ($i == "relay") { v = $(i + 1); if (v !~ /^-/) print v; break } }' \
             | sort -u || true)
+done
+
+# 7. Every bash or sh block in the new documents and the pages parses.
+for file in "${NEW_DOCS[@]}" "${PAGES[@]}"; do
+  [ -f "$file" ] || continue
+  blockdir=$(mktemp -d)
+  awk -v dir="$blockdir" '
+    /^```(bash|sh)$/ { on = 1; n++; out = dir "/block-" n ".sh"; next }
+    /^```$/ { on = 0; next }
+    on { print > out }' "$file"
+  for b in "$blockdir"/block-*.sh; do
+    [ -e "$b" ] || continue
+    if ! bash -n "$b" 2>/dev/null; then
+      fail "$file: a shell block does not parse"
+    fi
+  done
+  rm -f "$blockdir"/block-*.sh
+  rmdir "$blockdir"
 done
 
 if [ "$failures" -ne 0 ]; then
