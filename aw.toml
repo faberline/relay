@@ -165,5 +165,5 @@ category = "efficiency"
 # AW-EC-END
 
 [standards.coverage]
-line = 76.28
+line = 79.91
 target = 100
