@@ -7,7 +7,10 @@ How to run, configure, and test relay.
 | [Root README](../../README.md) | Build, the one `relay` binary and its verbs, and the gate commands. |
 | [ha.md](../ha.md) | Auto-mode raft HA, snapshots and the applied floor, the operator CR, backup and restore, and peer TLS. |
 | [install.md](install.md) | Install from the image or from source, the three-replica quickstart, and a first publish and consume. |
-| [runbook.md](runbook.md) | Operator runbook: node down, leader failover, disk full, backup, restore, drain and upgrade. |
+| [runbook.md](runbook.md) | Operator runbook: node down, leader failover, disk full, backup, restore, drain, upgrade and the lease-reclaim alert. |
+| [configuration.md](configuration.md) | Every flag and environment variable of the `relay` server, with its default and meaning. |
+| [limits.md](limits.md) | Body size, lease backoff, snapshot interval, priority bands, replicas, data size and request rates, each with its source. |
+| [threat-model.md](../security/threat-model.md) | Assets, trust boundaries, the threats with their controls and tests, and what the model leaves out. |
 | [upgrade.md](upgrade.md) | Version compatibility policy and the rolling-upgrade order. |
 | [worker-protocol.md](../worker-protocol.md) | The HTTP/2 + OpenAPI contract that workers in any language use. |
 | [perf-gate.md](../perf-gate.md) | The competitor perf gate and how to run it. |
