@@ -12,6 +12,7 @@ mod bounded_log;
 mod capacity_policy;
 mod cli_contract;
 mod cli_spec_codegen_cold_regen;
+mod compat;
 mod delayed_delivery;
 mod deploy_cli;
 mod direct_k8s_assets;
