@@ -7,8 +7,11 @@
 //! which workload to poll for readiness, and the `Relay` status subresource to
 //! write.
 
-use kube::ResourceExt;
+use std::future::Future;
+
+use kube::{Client, ResourceExt};
 use serde_json::json;
+use service_k8s::service::ReconcilePlan;
 use service_k8s::{ManagedService, ReadinessTarget, ReadyFacts};
 
 use super::crd::Relay;
@@ -22,13 +25,23 @@ impl ManagedService for Relay {
         render::render(self)
     }
 
+    /// Rejects a spec that the render cannot express (see `render::validate`)
+    /// before anything is rendered or applied.
+    fn reconcile_plan(
+        &self,
+        _client: Client,
+    ) -> impl Future<Output = anyhow::Result<ReconcilePlan>> + Send {
+        let plan = match render::validate(self) {
+            Ok(()) => Ok(ReconcilePlan::new(self.render(), serde_json::Value::Null)),
+            Err(reason) => Err(anyhow::anyhow!("invalid Relay spec: {reason}")),
+        };
+        async move { plan }
+    }
+
     fn readiness_targets(&self) -> Vec<ReadinessTarget> {
         // relay is always a StatefulSet (durable log + raft state on a PVC);
         // poll it for `.status.readyReplicas`.
-        vec![ReadinessTarget {
-            kind: "StatefulSet",
-            name: self.name_any(),
-        }]
+        vec![ReadinessTarget::new("StatefulSet", self.name_any())]
     }
 
     fn status_patch(&self, ready: &ReadyFacts) -> serde_json::Value {

@@ -75,6 +75,23 @@ async fn start_server(auth: Option<AuthConfig>) -> SocketAddr {
     addr
 }
 
+async fn start_server_with_state(auth: Option<AuthConfig>) -> (SocketAddr, AppState) {
+    let config = RelayServerConfig::ephemeral();
+    let state = match auth {
+        Some(a) => AppState::with_auth(config, a, 8 * 1024 * 1024),
+        None => AppState::new(config, 8 * 1024 * 1024),
+    };
+    let app = router(state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(service_http::serve(
+        listener,
+        app,
+        std::future::pending::<()>(),
+    ));
+    (addr, state)
+}
+
 fn h2c_client() -> reqwest::Client {
     reqwest::Client::builder()
         .http2_prior_knowledge()
@@ -299,6 +316,100 @@ async fn probes_stay_tokenless_under_required_auth() {
         let resp = client.get(url(addr, path)).send().await.unwrap();
         assert_eq!(resp.status(), 200, "probe {path} must stay tokenless");
     }
+}
+
+/// Probes stay 200 without token, with unknown bearer token, and with malformed auth,
+/// while data plane rejects both tokenless and unknown bearer requests with 401.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn probes_stay_tokenless_and_data_plane_rejects_unauthorized() {
+    let addr = start_server(Some(required_auth())).await;
+    let client = h2c_client();
+
+    for path in ["/healthz", "/readyz", "/metrics", "/openapi.json", "/docs"] {
+        let resp = client.get(url(addr, path)).send().await.unwrap();
+        assert_eq!(resp.status(), 200, "{path} with no token must return 200");
+
+        let resp_bearer = client
+            .get(url(addr, path))
+            .header(header::AUTHORIZATION, "Bearer not-a-real-token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp_bearer.status(),
+            200,
+            "{path} with unknown bearer token must return 200"
+        );
+
+        let resp_malformed = client
+            .get(url(addr, path))
+            .header(header::AUTHORIZATION, "Basic abc")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp_malformed.status(),
+            200,
+            "{path} with malformed authorization header must return 200"
+        );
+    }
+
+    let pub_unauth = publish(&client, addr, "jobs", "m0", None).await;
+    assert_eq!(
+        pub_unauth.status(),
+        401,
+        "/v1/jobs/publish with no token must return 401"
+    );
+
+    let len_unauth = client.get(url(addr, "/v1/jobs/len")).send().await.unwrap();
+    assert_eq!(
+        len_unauth.status(),
+        401,
+        "/v1/jobs/len with no token must return 401"
+    );
+
+    let pub_bad_token = publish(&client, addr, "jobs", "m0", Some("not-a-real-token")).await;
+    assert_eq!(
+        pub_bad_token.status(),
+        401,
+        "/v1/jobs/publish with unknown bearer token must return 401"
+    );
+
+    let len_bad_token = client
+        .get(url(addr, "/v1/jobs/len"))
+        .header(header::AUTHORIZATION, "Bearer not-a-real-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        len_bad_token.status(),
+        401,
+        "/v1/jobs/len with unknown bearer token must return 401"
+    );
+}
+
+/// When server is draining under required auth, /readyz returns 503 without token
+/// and /healthz still returns 200 without token.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn readyz_draining_returns_503_without_token() {
+    let (addr, state) = start_server_with_state(Some(required_auth())).await;
+    let client = h2c_client();
+
+    state.start_drain();
+
+    let readyz = client.get(url(addr, "/readyz")).send().await.unwrap();
+    assert_eq!(
+        readyz.status(),
+        503,
+        "/readyz with no token must return 503 when draining"
+    );
+
+    let healthz = client.get(url(addr, "/healthz")).send().await.unwrap();
+    assert_eq!(
+        healthz.status(),
+        200,
+        "/healthz with no token must return 200 when draining"
+    );
 }
 
 /// R2/AC3: the off default (StaticRoleMapVerifier::open through the same

@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use chrono::{Duration, Utc};
 use serde_json::json;
 
+use raft_runtime::Index;
 use relay::queue::server::{router, AppState};
 use relay::queue::server_config::RelayServerConfig;
 use relay::{Relay, RelayCoreConfig};
@@ -65,7 +66,7 @@ async fn admin_backup_returns_the_state_machine_snapshot_bytes() {
     let bytes = resp.bytes().await.unwrap();
 
     // ONE format: the endpoint bytes equal the state machine's serialization.
-    let expected = relay::snapshot_bytes(&state.relay_handle(), 0).unwrap();
+    let expected = relay::snapshot_bytes(&state.relay_handle(), Index::new(0)).unwrap();
     assert_eq!(
         &bytes[..],
         &expected[..],
@@ -73,7 +74,7 @@ async fn admin_backup_returns_the_state_machine_snapshot_bytes() {
     );
 
     let snap: relay::EngineSnapshot = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(snap.up_to, 0, "no raft attached: applied floor is 0");
+    assert_eq!(snap.up_to.get(), 0, "no raft attached: applied floor is 0");
     assert_eq!(snap.subjects.len(), 1);
     assert_eq!(snap.subjects[0].subject, "jobs");
     assert_eq!(snap.subjects[0].entries.len(), 1);
@@ -108,7 +109,7 @@ async fn backup_artifact_round_trips_through_load_live_on_a_fresh_engine() {
     // Fresh node: restore = exact state replacement.
     let fresh = Relay::new(RelayCoreConfig::in_memory());
     let up_to = relay::load_snapshot_bytes(&fresh, &artifact).unwrap();
-    assert_eq!(up_to, 0);
+    assert_eq!(up_to.get(), 0);
     // Idempotent: a second load of the same artifact dedupes, never appends.
     relay::load_snapshot_bytes(&fresh, &artifact).unwrap();
 
@@ -156,10 +157,12 @@ fn restore_preserves_truncated_sequence_space_and_committed_watermark() {
             .unwrap());
     }
 
-    let artifact = relay::snapshot_bytes(&source, 17).unwrap();
+    let artifact = relay::snapshot_bytes(&source, Index::new(17)).unwrap();
     let restored = Relay::new(RelayCoreConfig::in_memory());
     assert_eq!(
-        relay::load_snapshot_bytes(&restored, &artifact).unwrap(),
+        relay::load_snapshot_bytes(&restored, &artifact)
+            .unwrap()
+            .get(),
         17
     );
     assert!(restored.entry("jobs", 0, 0).unwrap().is_none());
@@ -376,7 +379,11 @@ async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
 
         let restored = Relay::new(RelayCoreConfig::in_memory());
         let up_to = relay::load_snapshot_bytes(&restored, &bytes).unwrap();
-        assert_eq!(up_to, 0, "artifact {artifact_idx}: applied index is 0");
+        assert_eq!(
+            up_to.get(),
+            0,
+            "artifact {artifact_idx}: applied index is 0"
+        );
 
         let committed_seq = restored
             .committed_offset(topic)
@@ -568,5 +575,61 @@ async fn concurrent_writes_produce_consistent_snapshots_during_backup() {
         final_restored_unacked, live_unacked,
         "artifact 20, seq {final_seq_marker}: final restored un-acked seqs match live engine"
     );
+}
+
+/// Close capability claim next-markers-on-write-and-backup-outputs (issue #8):
+/// `relay backup` against a live node (feature `backup`) ends stdout with the
+/// chainable marker, prints the `BackupRunResult` JSON before it, and writes
+/// the snapshot artifact to the `file://` sink.
+#[cfg(feature = "backup")]
+#[tokio::test(flavor = "multi_thread")]
+async fn relay_backup_verb_ends_stdout_with_chainable_marker() {
+    let (addr, state) = start_server().await;
+    state
+        .relay_handle()
+        .publish(
+            "jobs",
+            "m-1",
+            json!({"task": "t"}),
+            BTreeMap::new(),
+            Utc::now(),
+        )
+        .unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("http://{addr}");
+    let dest = format!("file://{}", dir.path().display());
+    // The server runs in this process, so the binary runs on a blocking thread.
+    let out = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_relay"))
+            .args(["backup", "--url", &url, "--dest", &dest])
+            .output()
+            .expect("run relay backup")
+    })
+    .await
+    .unwrap();
+    assert!(
+        out.status.success(),
+        "relay backup failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let last = stdout
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .expect("relay backup prints output");
+    assert_eq!(last, "next: done");
+    cli_std::chainable::assert_chainable(&stdout).expect("relay backup output is chainable");
+
+    let body = stdout
+        .trim_end()
+        .strip_suffix("next: done")
+        .expect("marker ends stdout");
+    serde_json::from_str::<serde_json::Value>(body).expect("JSON before the marker");
+
+    let written = std::fs::read_dir(dir.path()).unwrap().count();
+    assert!(written >= 1, "snapshot artifact written to the sink");
 }
 // HANDWRITE-END

@@ -402,4 +402,165 @@ fn raw_deploy_artifact_streams_stay_unwrapped() {
         );
     }
 }
+/// Issue #35 AC1: `--version relay@<v>` and `--version <v>` render identical
+/// bytes, and no rendered pin line keeps the committed default release
+/// version (`ARG RELAY_VERSION=`, `-t relay:`, `--build-arg RELAY_VERSION=`).
+#[test]
+fn dockerfile_render_version_normalization_and_default_replacement() {
+    let committed = include_str!("../../../../Dockerfile.release");
+    let default_tag = committed
+        .lines()
+        .find_map(|line| line.strip_prefix("ARG RELAY_VERSION="))
+        .expect("committed Dockerfile.release declares ARG RELAY_VERSION");
+    let default_version = default_tag
+        .strip_prefix("relay@")
+        .expect("committed default tag is relay@<version>");
+
+    let bare = stdout(&[
+        "dockerfile",
+        "render",
+        "--variant",
+        "release",
+        "--version",
+        "9.9.9",
+    ]);
+    let prefixed = stdout(&[
+        "dockerfile",
+        "render",
+        "--variant",
+        "release",
+        "--version",
+        "relay@9.9.9",
+    ]);
+    assert_eq!(
+        bare, prefixed,
+        "`--version 9.9.9` and `--version relay@9.9.9` must render identical output"
+    );
+
+    for line in bare.lines() {
+        let is_pin_line = line.starts_with("ARG RELAY_VERSION=")
+            || line.contains("-t relay:")
+            || line.contains("--build-arg RELAY_VERSION=");
+        if is_pin_line {
+            assert!(
+                !line.contains(default_version),
+                "stale default {default_version} survives in pin line: {line}"
+            );
+        }
+    }
+    assert!(
+        bare.lines()
+            .any(|line| line == "ARG RELAY_VERSION=relay@9.9.9"),
+        "pinned ARG line missing: {bare}"
+    );
+    assert!(
+        bare.lines().any(|line| line.contains("-t relay:9.9.9")),
+        "pinned image tag line missing: {bare}"
+    );
+}
+
+/// Issue #35 AC2: `--out <dir>` writes `Dockerfile` for `source` and
+/// `Dockerfile.release` for `release`. The file bytes equal the stdout render,
+/// and stdout has the `next: done` marker line.
+#[test]
+fn dockerfile_render_out_dir_writes_expected_files_and_terminal_marker() {
+    let cases: &[(&str, &str)] = &[("source", "Dockerfile"), ("release", "Dockerfile.release")];
+    for &(variant, file_name) in cases {
+        let raw = stdout(&["dockerfile", "render", "--variant", variant]);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out_dir = dir.path().join("rendered");
+        let out_dir_str = out_dir.to_str().expect("utf8 path");
+        let marked = stdout(&[
+            "dockerfile",
+            "render",
+            "--variant",
+            variant,
+            "--out",
+            out_dir_str,
+        ]);
+
+        let written = out_dir.join(file_name);
+        assert!(
+            written.is_file(),
+            "`--variant {variant} --out <dir>` must write {}",
+            written.display()
+        );
+        let bytes = std::fs::read_to_string(&written).expect("read rendered file");
+        assert_eq!(
+            bytes, raw,
+            "`--variant {variant} --out <dir>` file bytes must equal the stdout render"
+        );
+        assert!(
+            marked.lines().any(|line| line == "next: done"),
+            "`--variant {variant} --out <dir>` stdout missing `next: done`: {marked}"
+        );
+    }
+}
+
+/// Issue #35 AC2: `--out <file>` writes exactly the stdout render bytes to that
+/// path and prints the `next: done` marker line.
+#[test]
+fn dockerfile_render_out_file_writes_exact_bytes_and_terminal_marker() {
+    let raw = stdout(&[
+        "dockerfile",
+        "render",
+        "--variant",
+        "release",
+        "--version",
+        "9.9.9",
+    ]);
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("rendered.dockerfile");
+    let file_str = file.to_str().expect("utf8 path");
+    let marked = stdout(&[
+        "dockerfile",
+        "render",
+        "--variant",
+        "release",
+        "--version",
+        "9.9.9",
+        "--out",
+        file_str,
+    ]);
+
+    let bytes = std::fs::read(&file).expect("read rendered file");
+    assert_eq!(
+        bytes,
+        raw.as_bytes(),
+        "`--out <file>` must write exactly the stdout render bytes"
+    );
+    assert!(
+        marked.lines().any(|line| line == "next: done"),
+        "`--out <file>` stdout missing `next: done`: {marked}"
+    );
+}
+
+/// Issue #35 AC3: neither variant renders a source-ownership marker line. The
+/// markers are those `cli_std::artifact::strip_source_ownership_markers`
+/// removes: a line that starts with `# SPEC-MANAGED:`, and the lines
+/// `# CODEGEN-BEGIN` and `# CODEGEN-END`.
+#[test]
+fn dockerfile_render_strips_source_ownership_markers() {
+    for variant in ["source", "release"] {
+        let rendered = stdout(&["dockerfile", "render", "--variant", variant]);
+        assert!(
+            !rendered.is_empty(),
+            "`--variant {variant}` rendered empty output"
+        );
+        for line in rendered.lines() {
+            let trimmed = line.trim_start();
+            assert!(
+                !trimmed.starts_with("# SPEC-MANAGED:"),
+                "`--variant {variant}` keeps a SPEC-MANAGED marker: {line}"
+            );
+            assert!(
+                trimmed != "# CODEGEN-BEGIN" && trimmed != "# CODEGEN-END",
+                "`--variant {variant}` keeps a CODEGEN marker: {line}"
+            );
+        }
+    }
+}
+
 // HANDWRITE-END

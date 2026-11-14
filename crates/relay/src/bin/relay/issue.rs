@@ -89,11 +89,10 @@ pub(crate) async fn run(args: IssueArgs) -> Result<()> {
             let query = (!joined.trim().is_empty()).then_some(joined);
             cli_std::issue::search(
                 &TOOL,
-                cli_std::issue::SearchOptions {
-                    query,
-                    state: m.state,
-                    limit: m.limit,
-                },
+                cli_std::issue::SearchOptions::default()
+                    .with_query(query)
+                    .with_state(m.state)
+                    .with_limit(m.limit),
             )
             .await
         }
@@ -111,32 +110,23 @@ pub(crate) async fn run(args: IssueArgs) -> Result<()> {
             let message = (!msg.trim().is_empty()).then_some(msg);
             cli_std::issue::create(
                 &TOOL,
-                cli_std::issue::CreateOptions {
-                    title,
-                    message,
-                    url: None,
-                    repo: None,
-                    label: vec!["app:relay".to_string()],
-                    dry_run: m.dry_run,
-                    yes: true,
-                },
+                cli_std::issue::CreateOptions::new(title)
+                    .with_message(message)
+                    .with_label(vec!["app:relay".to_string()])
+                    .with_dry_run(m.dry_run)
+                    .with_yes(true),
             )
             .await
         }
         IssueCommand::Comment(m) => {
             let msg = m.message.join(" ");
             let message = (!msg.trim().is_empty()).then_some(msg);
-            cli_std::issue::comment(
-                &TOOL,
-                cli_std::issue::CommentOptions {
-                    number: m.number,
-                    message,
-                    repo: m.repo,
-                    dry_run: m.dry_run,
-                    yes: m.yes,
-                },
-            )
-            .await
+            let opts = cli_std::issue::CommentOptions::try_new(m.number)?
+                .with_message(message)
+                .with_repo(m.repo)
+                .with_dry_run(m.dry_run)
+                .with_yes(m.yes);
+            cli_std::issue::comment(&TOOL, opts).await
         }
     }
 }
@@ -147,33 +137,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_comment_zero() {
-        let res = cli_std::issue::comment(
-            &TOOL,
-            cli_std::issue::CommentOptions {
-                number: 0,
-                message: Some("test".into()),
-                repo: None,
-                dry_run: true,
-                yes: true,
-            },
-        )
-        .await;
+        // Issue 0 is rejected when the options are built, before `comment` runs.
+        let res = cli_std::issue::CommentOptions::try_new(0);
         assert!(res.is_err(), "comment(0) should be err, got: {:?}", res);
     }
 
     #[tokio::test]
     async fn test_comment_dry_run() {
-        let res = cli_std::issue::comment(
-            &TOOL,
-            cli_std::issue::CommentOptions {
-                number: 123,
-                message: Some("still broken".into()),
-                repo: None,
-                dry_run: true,
-                yes: true,
-            },
-        )
-        .await;
+        let opts = cli_std::issue::CommentOptions::try_new(123)
+            .expect("123 is a valid issue number")
+            .with_message("still broken".to_string())
+            .with_dry_run(true)
+            .with_yes(true);
+        let res = cli_std::issue::comment(&TOOL, opts).await;
         assert!(
             res.is_ok(),
             "comment dry run should succeed, got: {:?}",

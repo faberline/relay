@@ -36,7 +36,7 @@ fn count_segments(dir: &std::path::Path) -> usize {
         .filter(|e| {
             let n = e.file_name();
             let n = n.to_string_lossy();
-            n.starts_with("s__shard0__") && n.ends_with(".ndjson")
+            n.starts_with("s__shard0__") && n.ends_with(".frames")
         })
         .count()
 }

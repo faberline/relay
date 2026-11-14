@@ -13,7 +13,17 @@
 //! `crate::raft::load_snapshot_bytes`. Log sequence space, committed offsets,
 //! active fenced leases, and delayed/retry state survive the round trip.
 
-pub use service_backup::{
-    fetch_admin_snapshot as fetch_snapshot_bytes, run_admin_snapshot_backup as run_backup,
-};
+pub use service_backup::run_admin_snapshot_backup as run_backup;
+
+/// Fetch the exact snapshot bytes of a running node (`GET /admin/backup`),
+/// with an optional bearer token. The transport applies its timeouts and its
+/// diagnostic size limit.
+pub async fn fetch_snapshot_bytes(base_url: &str, token: Option<&str>) -> anyhow::Result<Vec<u8>> {
+    let transport = service_backup::AdminSnapshotTransport::new()?;
+    let request = match token {
+        Some(token) => service_backup::AdminSnapshotRequest::new().with_static_bearer(token),
+        None => service_backup::AdminSnapshotRequest::new(),
+    };
+    Ok(transport.fetch(base_url, &request).await?)
+}
 // HANDWRITE-END

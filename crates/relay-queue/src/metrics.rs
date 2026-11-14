@@ -15,7 +15,7 @@ use std::time::Instant;
 use axum::extract::{MatchedPath, Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
-use metrics_prometheus::{Latency, Sample};
+use metrics_prometheus::{Counter, Latency, Sample};
 
 /// Per-op request metrics for the relay data plane. One [`Latency`]
 /// (count + latency-ms sum) per op family; `count` doubles as the request
@@ -25,6 +25,8 @@ pub struct RelayMetrics {
     pub publish: Latency,
     pub publish_batch: Latency,
     pub lease: Latency,
+    /// Lease and lease-batch requests that answered a 5xx status.
+    pub lease_errors: Counter,
     pub ack: Latency,
     pub consume: Latency,
     /// Everything else on the data plane (heartbeat, len, ...).
@@ -55,6 +57,15 @@ impl RelayMetrics {
         self.op(route).observe(latency_ms);
     }
 
+    /// Record the response status of one request. A 5xx answer of a lease or
+    /// lease-batch request counts as a lease error.
+    pub fn observe_status(&self, route: &str, status: u16) {
+        let is_lease = matches!(route.rsplit('/').next(), Some("lease" | "lease-batch"));
+        if is_lease && (500..=599).contains(&status) {
+            self.lease_errors.incr();
+        }
+    }
+
     /// Render the Prometheus text exposition (0.0.4) for the recorded
     /// request metrics, through the shared `metrics_prometheus` encoder.
     pub fn render(&self) -> String {
@@ -63,109 +74,115 @@ impl RelayMetrics {
                 "relay_publish_requests_total",
                 "counter",
                 "Total publish requests.",
-                self.publish.count.get(),
+                self.publish.count().get(),
             ),
             Sample::new(
                 "relay_publish_latency_ms_sum",
                 "counter",
                 "Sum of publish request latencies in milliseconds.",
-                self.publish.sum.get(),
+                self.publish.sum().get(),
             ),
             Sample::new(
                 "relay_publish_latency_ms_count",
                 "counter",
                 "Count of publish latency observations.",
-                self.publish.count.get(),
+                self.publish.count().get(),
             ),
             Sample::new(
                 "relay_publish_batch_requests_total",
                 "counter",
                 "Total publish-batch requests.",
-                self.publish_batch.count.get(),
+                self.publish_batch.count().get(),
             ),
             Sample::new(
                 "relay_publish_batch_latency_ms_sum",
                 "counter",
                 "Sum of publish-batch request latencies in milliseconds.",
-                self.publish_batch.sum.get(),
+                self.publish_batch.sum().get(),
             ),
             Sample::new(
                 "relay_publish_batch_latency_ms_count",
                 "counter",
                 "Count of publish-batch latency observations.",
-                self.publish_batch.count.get(),
+                self.publish_batch.count().get(),
             ),
             Sample::new(
                 "relay_lease_requests_total",
                 "counter",
                 "Total lease and lease-batch requests.",
-                self.lease.count.get(),
+                self.lease.count().get(),
             ),
             Sample::new(
                 "relay_lease_latency_ms_sum",
                 "counter",
                 "Sum of lease request latencies in milliseconds.",
-                self.lease.sum.get(),
+                self.lease.sum().get(),
             ),
             Sample::new(
                 "relay_lease_latency_ms_count",
                 "counter",
                 "Count of lease latency observations.",
-                self.lease.count.get(),
+                self.lease.count().get(),
+            ),
+            Sample::new(
+                "relay_lease_errors_total",
+                "counter",
+                "Lease and lease-batch requests that answered a 5xx status.",
+                self.lease_errors.get(),
             ),
             Sample::new(
                 "relay_ack_requests_total",
                 "counter",
                 "Total ack and ack-batch requests.",
-                self.ack.count.get(),
+                self.ack.count().get(),
             ),
             Sample::new(
                 "relay_ack_latency_ms_sum",
                 "counter",
                 "Sum of ack request latencies in milliseconds.",
-                self.ack.sum.get(),
+                self.ack.sum().get(),
             ),
             Sample::new(
                 "relay_ack_latency_ms_count",
                 "counter",
                 "Count of ack latency observations.",
-                self.ack.count.get(),
+                self.ack.count().get(),
             ),
             Sample::new(
                 "relay_consume_requests_total",
                 "counter",
                 "Total streaming consume sessions opened.",
-                self.consume.count.get(),
+                self.consume.count().get(),
             ),
             Sample::new(
                 "relay_consume_latency_ms_sum",
                 "counter",
                 "Sum of consume handler latencies in milliseconds (stream setup, not stream lifetime).",
-                self.consume.sum.get(),
+                self.consume.sum().get(),
             ),
             Sample::new(
                 "relay_consume_latency_ms_count",
                 "counter",
                 "Count of consume latency observations.",
-                self.consume.count.get(),
+                self.consume.count().get(),
             ),
             Sample::new(
                 "relay_other_requests_total",
                 "counter",
                 "Total other data-plane requests (heartbeat, len, ...).",
-                self.other.count.get(),
+                self.other.count().get(),
             ),
             Sample::new(
                 "relay_other_latency_ms_sum",
                 "counter",
                 "Sum of other data-plane request latencies in milliseconds.",
-                self.other.sum.get(),
+                self.other.sum().get(),
             ),
             Sample::new(
                 "relay_other_latency_ms_count",
                 "counter",
                 "Count of other data-plane latency observations.",
-                self.other.count.get(),
+                self.other.count().get(),
             ),
         ])
     }
@@ -183,6 +200,7 @@ pub async fn track(State(metrics): State<Arc<RelayMetrics>>, req: Request, next:
     let start = Instant::now();
     let resp = next.run(req).await;
     metrics.observe(&route, start.elapsed().as_millis() as u64);
+    metrics.observe_status(&route, resp.status().as_u16());
     resp
 }
 
@@ -202,13 +220,13 @@ mod tests {
         m.observe("/v1/{subject}/consume", 5);
         m.observe("/v1/{subject}/heartbeat", 1);
         m.observe("/v1/{subject}/len", 1);
-        assert_eq!(m.publish.count.get(), 1);
-        assert_eq!(m.publish.sum.get(), 3);
-        assert_eq!(m.publish_batch.count.get(), 1);
-        assert_eq!(m.lease.count.get(), 2);
-        assert_eq!(m.ack.count.get(), 2);
-        assert_eq!(m.consume.count.get(), 1);
-        assert_eq!(m.other.count.get(), 2);
+        assert_eq!(m.publish.count().get(), 1);
+        assert_eq!(m.publish.sum().get(), 3);
+        assert_eq!(m.publish_batch.count().get(), 1);
+        assert_eq!(m.lease.count().get(), 2);
+        assert_eq!(m.ack.count().get(), 2);
+        assert_eq!(m.consume.count().get(), 1);
+        assert_eq!(m.other.count().get(), 2);
     }
 
     #[test]
@@ -220,6 +238,25 @@ mod tests {
         assert!(out.contains("relay_publish_requests_total 1"));
         assert!(out.contains("relay_publish_latency_ms_sum 7"));
         assert!(out.contains("relay_consume_requests_total 0"));
+        assert!(out.contains("# TYPE relay_lease_errors_total counter"));
+        assert!(out.contains("relay_lease_errors_total 0"));
+    }
+
+    #[test]
+    fn lease_5xx_counts_as_lease_error() {
+        let m = RelayMetrics::new();
+        m.observe_status("/v1/{subject}/lease", 503);
+        m.observe_status("/v1/{subject}/lease-batch", 500);
+        assert_eq!(m.lease_errors.get(), 2);
+    }
+
+    #[test]
+    fn other_statuses_and_routes_do_not_count() {
+        let m = RelayMetrics::new();
+        m.observe_status("/v1/{subject}/lease", 200);
+        m.observe_status("/v1/{subject}/lease", 404);
+        m.observe_status("/v1/{subject}/publish", 500);
+        assert_eq!(m.lease_errors.get(), 0);
     }
 }
 // HANDWRITE-END
