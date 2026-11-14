@@ -399,4 +399,70 @@ fn gke_test_overlay_merged_intent_and_affinity() {
         "gke-test anti-affinity matchLabels must equal the base pod labels"
     );
 }
+
+/// The `expr` of the `RelayLeaseReclaiming` alert in the shipped rule file.
+fn lease_alert_expr(rules: &Value) -> &str {
+    for group in rules["spec"]["groups"].as_sequence().unwrap() {
+        for rule in group["rules"].as_sequence().unwrap() {
+            if rule["alert"] == "RelayLeaseReclaiming" {
+                return rule["expr"].as_str().unwrap();
+            }
+        }
+    }
+    panic!("RelayLeaseReclaiming rule missing from prometheusrule.yaml");
+}
+
+/// Every `relay_*` metric name that an alert expression mentions.
+fn relay_metric_names(expr: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut rest = expr;
+    while let Some(pos) = rest.find("relay_") {
+        let tail = &rest[pos..];
+        let end = tail
+            .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
+            .unwrap_or(tail.len());
+        names.push(tail[..end].to_string());
+        rest = &tail[end..];
+    }
+    names
+}
+
+#[test]
+fn prometheusrule_names_only_exported_metrics() {
+    let rules = yaml(include_str!(
+        "../../../../k8s/components/observability/prometheusrule.yaml"
+    ));
+    let exported = include_str!("../../../relay-queue/src/metrics.rs");
+    let mut checked = 0;
+    for group in rules["spec"]["groups"].as_sequence().unwrap() {
+        for rule in group["rules"].as_sequence().unwrap() {
+            let expr = rule["expr"].as_str().unwrap();
+            for name in relay_metric_names(expr) {
+                assert!(
+                    exported.contains(&format!("\"{name}\"")),
+                    "alert {} names {name}, which relay-queue metrics.rs does not export",
+                    rule["alert"].as_str().unwrap_or("?")
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 0, "no relay_* metric found in the alert rules");
+    assert!(
+        !lease_alert_expr(&rules).is_empty(),
+        "RelayLeaseReclaiming must name a metric"
+    );
+}
+
+#[test]
+fn runbook_quotes_the_lease_alert_rule() {
+    let rules = yaml(include_str!(
+        "../../../../k8s/components/observability/prometheusrule.yaml"
+    ));
+    let runbook = include_str!("../../../../docs/operations/runbook.md");
+    assert!(
+        runbook.contains(lease_alert_expr(&rules)),
+        "docs/operations/runbook.md must quote the RelayLeaseReclaiming rule as shipped"
+    );
+}
 // HANDWRITE-END

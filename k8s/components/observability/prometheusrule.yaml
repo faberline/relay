@@ -7,7 +7,7 @@ spec:
     - name: relay
       rules:
         - alert: RelayLeaseReclaiming
-          expr: increase(relay_requests_total{route=~".*lease.*",status=~"5.."}[5m]) > 0
+          expr: increase(relay_lease_errors_total[5m]) > 0
           for: 5m
           labels: {severity: warning}
           annotations:
