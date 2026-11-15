@@ -505,12 +505,21 @@ impl Group {
         &self.nodes[id].as_ref().expect("node running").raft
     }
 
-    /// Stop the node: abort its serve loop and shut its host down. Its dirs stay.
+    /// Stop the node gracefully so that its open peer connections close (relay#206).
+    /// An abort of the serve loop alone leaves those connections talking to the
+    /// old node. Its dirs stay.
     async fn kill(&mut self, id: usize) {
         if let Some(mut n) = self.nodes[id].take() {
-            n.shutdown.take();
-            n.serve.abort();
-            let _ = n.serve.await;
+            if let Some(tx) = n.shutdown.take() {
+                let _ = tx.send(());
+            }
+            if tokio::time::timeout(Duration::from_secs(2), &mut n.serve)
+                .await
+                .is_err()
+            {
+                n.serve.abort();
+                let _ = n.serve.await;
+            }
             n.raft.shutdown().await.unwrap();
         }
     }
@@ -756,6 +765,64 @@ async fn three_voter_full_group_restart_keeps_history_and_elects() {
             ids(&["a", "b", "c", "d"]),
             "node {i} holds a,b,c,d (d is entry 4)"
         );
+    }
+    g.shutdown().await;
+}
+
+/// Wait until every node holds `want` entries in subject `s` and all nodes
+/// report one applied index. Panics with `(id, applied_index, log_len)` of
+/// each node after `timeout`.
+async fn wait_all_equal(g: &Group, want: u64, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let state: Vec<(usize, u64, u64)> = g
+            .live()
+            .map(|(i, n)| {
+                (
+                    i,
+                    n.raft.applied_index().get(),
+                    n.raft.relay().log_len("s").unwrap(),
+                )
+            })
+            .collect();
+        if state.iter().all(|s| s.2 == want) && state.windows(2).all(|w| w[0].1 == w[1].1) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "stuck after rolling restart (id, applied_index, log_len): {state:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// relay#206: after a rolling restart of all three voters, every node must
+/// reach the same log length and applied index, and hold m0..m4 in order.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rolling_restart_leaves_no_voter_behind() {
+    let _guard = CLUSTER_TEST_LOCK.lock().await;
+    let mut g = Group::prepare(3).await;
+    g.start_all();
+    g.wait_single_leader().await;
+    for m in ["m0", "m1", "m2"] {
+        publish_until_committed(&g, m).await;
+    }
+    g.wait_converged(3).await;
+
+    for i in 0..3 {
+        g.kill(i).await;
+        g.start_node(i);
+        g.wait_single_leader().await;
+    }
+
+    for m in ["m3", "m4"] {
+        publish_until_committed(&g, m).await;
+    }
+    wait_all_equal(&g, 5, Duration::from_secs(30)).await;
+
+    let want = ids(&["m0", "m1", "m2", "m3", "m4"]);
+    for i in 0..3 {
+        assert_eq!(g.message_ids(i), want, "node {i} holds m0..m4 in order");
     }
     g.shutdown().await;
 }

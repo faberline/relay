@@ -20,6 +20,6 @@ FROM registry.k8s.io/kubectl:v1.33.4@sha256:261a9ed843eb68e3d50da132245e2221d75c
 # musl test binary. :nonroot = uid 65532.
 FROM gcr.io/distroless/static-debian12:nonroot AS test-client
 ARG TARGETARCH=amd64
-COPY --from=kubectl /bin/kubectl /usr/local/bin/kubectl
+COPY --chown=65532:65532 --from=kubectl /bin/kubectl /usr/local/bin/kubectl
 COPY --chown=65532:65532 dist/linux/${TARGETARCH}/relay-it /usr/local/bin/relay-it
 ENTRYPOINT ["/usr/local/bin/relay-it"]
