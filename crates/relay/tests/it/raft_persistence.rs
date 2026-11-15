@@ -760,4 +760,130 @@ async fn three_voter_full_group_restart_keeps_history_and_elects() {
     g.shutdown().await;
 }
 
+/// Polls until every live node holds exactly `want` entries, reports the same
+/// applied index, and that index is at least `want + 1` (the core v0.5.0
+/// leader appends one Noop entry per term). Returns the shared applied index.
+async fn wait_exact(g: &Group, want: u64, step: &str) -> u64 {
+    let deadline = Instant::now() + DEADLINE;
+    loop {
+        let rows: Vec<(usize, u64, u64)> = g
+            .live()
+            .map(|(i, n)| {
+                (
+                    i,
+                    n.raft.applied_index().get(),
+                    n.raft.relay().log_len("s").unwrap(),
+                )
+            })
+            .collect();
+        let ok = rows
+            .iter()
+            .all(|r| r.2 == want && r.1 > want && r.1 == rows[0].1);
+        if ok {
+            return rows[0].1;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{step}: want log_len {want}, one shared applied_index above {want}; nodes (id, applied_index, log_len): {rows:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Every live node holds exactly the message ids `want`, in order, no duplicate.
+fn assert_ids(g: &Group, want: &[&str], step: &str) {
+    let want = ids(want);
+    for (i, _) in g.live() {
+        assert_eq!(g.message_ids(i), want, "{step}: node {i} message ids");
+    }
+}
+
+/// Claim `raft-hard-state-restart-safety` (issue 18, issue 201): a three-voter
+/// group keeps its hard state across a follower restart, a leader restart and a
+/// rolling restart of all voters: the applied index never goes back, nothing is
+/// applied twice, one leader remains and no committed publish is lost.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn restarted_voters_rejoin_with_hard_state_intact() {
+    let _guard = CLUSTER_TEST_LOCK.lock().await;
+    let mut g = Group::prepare(3).await;
+    g.start_all();
+
+    // Step 1: elect a leader, publish three messages, every node holds 3.
+    let leader = g.wait_single_leader().await;
+    for m in ["m0", "m1", "m2"] {
+        let (_, out) =
+            g.raft(leader).publish(&cmd(m)).await.unwrap_or_else(|e| {
+                panic!("step 1: publish {m} via leader {leader} failed: {e:#}")
+            });
+        assert!(
+            !out.expect("leader claims outcome").deduped,
+            "step 1: publish {m} via leader {leader} was deduped"
+        );
+    }
+    wait_exact(&g, 3, "step 1 initial publish").await;
+
+    // Step 2: follower restart. Record its applied index before the kill.
+    let leader = g.wait_single_leader().await;
+    let follower = (0..3).find(|i| *i != leader).expect("a follower");
+    let before = g.raft(follower).applied_index().get();
+    g.kill(follower).await;
+    g.start_node(follower);
+    g.wait_single_leader().await;
+    let applied = wait_exact(&g, 3, "step 2 follower restart").await;
+    assert!(
+        applied >= before,
+        "step 2: node {follower} applied_index went back from {before} to {applied}"
+    );
+
+    // Step 3: leader restart. Record its applied index before the kill.
+    let leader = g.wait_single_leader().await;
+    let before = g.raft(leader).applied_index().get();
+    g.kill(leader).await;
+    g.start_node(leader);
+    g.wait_single_leader().await;
+    let (retried, deduped) = publish_until_committed(&g, "m3").await;
+    assert!(!deduped || retried, "step 3: publish m3 was deduped");
+    let applied = wait_exact(&g, 4, "step 3 publish after leader restart").await;
+    assert!(
+        applied >= before,
+        "step 3: node {leader} applied_index went back from {before} to {applied}"
+    );
+    assert_ids(&g, &["m0", "m1", "m2", "m3"], "step 3 after leader restart");
+
+    // Step 4: restart all three voters one after another, then publish once more.
+    let before = applied;
+    for id in 0..3 {
+        g.kill(id).await;
+        g.start_node(id);
+    }
+    g.wait_single_leader().await;
+    let (retried, deduped) = publish_until_committed(&g, "m4").await;
+    assert!(!deduped || retried, "step 4: publish m4 was deduped");
+    let applied = wait_exact(&g, 5, "step 4 publish after rolling restart").await;
+    assert!(
+        applied > before,
+        "step 4: applied_index did not advance after m4: {applied} <= {before}"
+    );
+    assert_ids(
+        &g,
+        &["m0", "m1", "m2", "m3", "m4"],
+        "step 4 after rolling restart",
+    );
+
+    // Step 5: an already published id dedupes and the log does not grow.
+    let leader = g.wait_single_leader().await;
+    let (_, dup) = g
+        .raft(leader)
+        .publish(&cmd("m0"))
+        .await
+        .unwrap_or_else(|e| panic!("step 5: re-publish m0 via leader {leader} failed: {e:#}"));
+    assert!(
+        dup.expect("outcome").deduped,
+        "step 5: re-publish of m0 via leader {leader} was not deduped"
+    );
+    wait_exact(&g, 5, "step 5 re-publish of m0").await;
+
+    g.shutdown().await;
+}
+
 // HANDWRITE-END
