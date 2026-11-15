@@ -48,7 +48,7 @@ RUN set -eux; \
 # ---- stage 1b: copy the pre-staged candidate binary (workflow path) ----------
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS binary-source-staged
 ARG TARGETARCH
-COPY dist/linux/${TARGETARCH}/relay /tmp/relay
+COPY --chown=65532:65532 dist/linux/${TARGETARCH}/relay /tmp/relay
 
 FROM binary-source-${SOURCE} AS binary-source
 

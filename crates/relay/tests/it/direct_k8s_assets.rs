@@ -465,4 +465,56 @@ fn runbook_quotes_the_lease_alert_rule() {
         "docs/operations/runbook.md must quote the RelayLeaseReclaiming rule as shipped"
     );
 }
+
+#[test]
+fn gke_test_patch_image_has_a_tag_and_pod_is_non_root() {
+    let patch = yaml(include_str!(
+        "../../../../k8s/overlays/gke-test/statefulset-patch.yaml"
+    ));
+    let pod = &patch["spec"]["template"]["spec"];
+    assert_eq!(
+        pod["containers"][0]["image"], "ghcr.io/faberline/relay:REPLACE_ME",
+        "gke-test StatefulSet patch image must carry the REPLACE_ME tag"
+    );
+    assert_eq!(
+        pod["securityContext"]["runAsNonRoot"], true,
+        "gke-test StatefulSet patch must set pod securityContext.runAsNonRoot: true"
+    );
+}
+
+#[test]
+fn gke_test_job_image_has_a_tag() {
+    let job = yaml(include_str!(
+        "../../../../k8s/gke-test-job/raft_failover/job.yaml"
+    ));
+    assert_eq!(
+        job["spec"]["template"]["spec"]["containers"][0]["image"], "relay-test-client:REPLACE_ME",
+        "raft_failover Job image must carry the REPLACE_ME tag"
+    );
+}
+
+#[test]
+fn dockerfile_copies_set_the_nonroot_owner() {
+    let dockerfiles = [
+        (
+            "Dockerfile.release",
+            include_str!("../../../../Dockerfile.release"),
+        ),
+        (
+            "Dockerfile.test",
+            include_str!("../../../../Dockerfile.test"),
+        ),
+    ];
+    for (name, text) in dockerfiles {
+        for (index, line) in text.lines().enumerate() {
+            if line.trim_start().starts_with("COPY ") {
+                assert!(
+                    line.contains("--chown=65532:65532"),
+                    "{name} line {}: COPY must set --chown=65532:65532: {line}",
+                    index + 1
+                );
+            }
+        }
+    }
+}
 // HANDWRITE-END

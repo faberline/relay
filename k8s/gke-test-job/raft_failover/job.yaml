@@ -44,8 +44,9 @@ spec:
       containers:
         - name: test
           # Replaced by the workflow's test-image (Dockerfile.test, target
-          # test-client).
-          image: relay-test-client
+          # test-client). The workflow replaces the placeholder tag together
+          # with the name (kustomize matches the image name without its tag).
+          image: relay-test-client:REPLACE_ME
           command:
             - /usr/local/bin/relay-it
             - --ignored
