@@ -407,6 +407,15 @@ fn state_machine_completed_proposals_restored_prevent_double_apply() {
 /// pre-bound listener per node, a per-node tempdir for `relay/` and `raft/`.
 const DEADLINE: Duration = Duration::from_secs(8);
 
+/// Raft tick of the `Group` nodes. The default 20 ms tick makes one election
+/// take at least 1 s of wall time; 10 ms gives the same 8 s `DEADLINE` twice
+/// the election timeouts.
+const GROUP_TICK: Duration = Duration::from_millis(10);
+
+fn group_host_config() -> raft_runtime::HostConfig {
+    RelayRaft::host_config(1024).with_tick(GROUP_TICK)
+}
+
 struct Node {
     raft: Arc<RelayRaft>,
     serve: tokio::task::JoinHandle<()>,
@@ -462,7 +471,7 @@ impl Group {
                 NodeId::new(id as u64),
                 self.membership.clone(),
                 peers,
-                RelayRaft::host_config(1024),
+                group_host_config(),
             )
             .unwrap(),
         );
@@ -559,7 +568,7 @@ impl Group {
             }
             assert!(
                 Instant::now() < deadline,
-                "expected exactly one leader within 8 s, got {leaders:?}"
+                "expected exactly one leader within 8 s (tick {GROUP_TICK:?}), got {leaders:?}"
             );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -951,6 +960,12 @@ async fn restarted_voters_rejoin_with_hard_state_intact() {
     wait_exact(&g, 5, "step 5 re-publish of m0").await;
 
     g.shutdown().await;
+}
+
+#[test]
+fn group_nodes_use_the_fast_election_tick() {
+    assert_eq!(group_host_config().tick(), Duration::from_millis(10));
+    assert!(group_host_config().tick() < raft_runtime::HostConfig::default().tick());
 }
 
 // HANDWRITE-END
