@@ -13,6 +13,11 @@
 # Suites (aw docs/standards/test-cluster.md "Test suites"):
 #   raft_failover  k8s/gke-test-job/raft_failover
 #
+# Selection: on a pull request, test-select runs scripts/ci/select-gke.sh on the
+# changed paths; the e2e-* jobs are skipped when no changed path can affect the
+# GKE suite (cost control, aw docs/standards/cost-control.md rule 2). push to
+# main and workflow_dispatch run everything.
+#
 # GKE runs linux/amd64 only. aw owns the cluster, both pools, and the
 # gke-test-relay service account (infra/gke-test/pools.yaml in faberline/aw);
 # nothing here creates cloud resources.
@@ -71,6 +76,8 @@ jobs:
           uv run --python 3.13 --no-project scripts/release/verify-release-contract.py --app relay
           uv run --python 3.13 --no-project scripts/release/verify-release-contract.py --self-test
           uv run --python 3.13 --no-project scripts/release/make-gke-release-receipt.py --self-test
+      - name: Selection rule test
+        run: bash scripts/ci/select-gke.test.sh
 
   test-workspace:
     name: "test: workspace"
@@ -132,9 +139,46 @@ jobs:
         with:
           summary: target/coverage.json
 
+  test-select:
+    name: "test: select GKE suites"
+    needs: [lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      gke: ${{ steps.select.outputs.gke }}
+      reason: ${{ steps.select.outputs.reason }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Select
+        id: select
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+            git diff --name-only --no-renames "$base" "$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+          else
+            : > "$RUNNER_TEMP/changed.txt"
+          fi
+          bash scripts/ci/select-gke.sh < "$RUNNER_TEMP/changed.txt" | tee -a "$GITHUB_OUTPUT"
+          {
+            echo "### GKE selection"
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/changed.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   e2e-image:
     name: "e2e: build server image"
-    needs: [test-workspace, test-features]
+    needs: [test-workspace, test-features, test-select]
+    if: needs.test-select.outputs.gke == 'true'
     permissions:
       contents: read
       packages: write
@@ -142,7 +186,8 @@ jobs:
 
   e2e-test-client:
     name: "e2e: build test-client image"
-    needs: [test-workspace, test-features]
+    needs: [test-workspace, test-features, test-select]
+    if: needs.test-select.outputs.gke == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -293,7 +338,8 @@ jobs:
 
   e2e-raft-failover:
     name: "e2e: raft_failover"
-    needs: [e2e-resolve, e2e-test-client]
+    needs: [e2e-resolve, e2e-test-client, test-select]
+    if: needs.test-select.outputs.gke == 'true'
     permissions:
       id-token: write
       contents: read
@@ -313,7 +359,7 @@ jobs:
   gate:
     name: gate
     if: always()
-    needs: [lint, test-workspace, test-features, test-coverage, e2e-image, e2e-test-client, e2e-resolve, e2e-raft-failover]
+    needs: [lint, test-workspace, test-features, test-coverage, test-select, e2e-image, e2e-test-client, e2e-resolve, e2e-raft-failover]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -324,3 +370,11 @@ jobs:
           echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
           echo "$RESULTS" | jq -e '.lint.result == "success"' > /dev/null
           echo "$RESULTS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")' > /dev/null
+          echo "$RESULTS" | jq -e '."test-select".result == "success"' > /dev/null
+          gke="$(echo "$RESULTS" | jq -r '."test-select".outputs.gke')"
+          reason="$(echo "$RESULTS" | jq -r '."test-select".outputs.reason')"
+          if [[ "$gke" == "true" ]]; then
+            echo "$RESULTS" | jq -e '."e2e-raft-failover".result == "success"' > /dev/null
+          else
+            echo "e2e-raft-failover: skipped-by-selection ($reason)"
+          fi
