@@ -324,6 +324,7 @@ fn engine<T>(r: io::Result<T>) -> Result<T, Response> {
     post,
     path = "/v1/{subject}/publish",
     params(("subject" = String, Path, description = "Target subject")),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
     responses((status = 200, description = "Append outcome { seq, deduped }"))
 )]
 pub async fn publish(
@@ -419,6 +420,7 @@ async fn propose_publish(
     post,
     path = "/v1/{subject}/publish-batch",
     params(("subject" = String, Path, description = "Target subject")),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
     responses((status = 200, description = "One append outcome per message, in order"))
 )]
 pub async fn publish_batch(
@@ -482,6 +484,7 @@ pub async fn publish_batch(
     post,
     path = "/v1/{subject}/lease",
     params(("subject" = String, Path, description = "Target subject")),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
     responses((status = 200, description = "A lease, or null when nothing is available"))
 )]
 pub async fn lease(
@@ -534,6 +537,7 @@ pub async fn lease(
     post,
     path = "/v1/{subject}/ack",
     params(("subject" = String, Path, description = "Target subject")),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
     responses((status = 200, description = "Ack result { acked, committed_seq }"))
 )]
 pub async fn ack(
@@ -603,6 +607,7 @@ pub async fn ack(
     post,
     path = "/v1/{subject}/lease-batch",
     params(("subject" = String, Path, description = "Target subject")),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
     responses((status = 200, description = "Up to max leases in seq order"))
 )]
 pub async fn lease_batch(
@@ -653,6 +658,7 @@ pub async fn lease_batch(
     post,
     path = "/v1/{subject}/ack-batch",
     params(("subject" = String, Path, description = "Target subject")),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
     responses((status = 200, description = "Count accepted + committed offset"))
 )]
 pub async fn ack_batch(
@@ -720,6 +726,7 @@ pub async fn ack_batch(
     post,
     path = "/v1/{subject}/heartbeat",
     params(("subject" = String, Path, description = "Target subject")),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
     responses((status = 200, description = "Heartbeat result { extended, expires_at }"))
 )]
 pub async fn heartbeat(
