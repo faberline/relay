@@ -4121,7 +4121,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "relay"
-version = "0.4.13"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -4173,7 +4173,7 @@ dependencies = [
 
 [[package]]
 name = "relay-access"
-version = "0.4.13"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "service-auth",
@@ -4181,7 +4181,7 @@ dependencies = [
 
 [[package]]
 name = "relay-broker"
-version = "0.4.13"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "crc32fast",
@@ -4195,7 +4195,7 @@ dependencies = [
 
 [[package]]
 name = "relay-operator"
-version = "0.4.13"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "k8s-openapi",
@@ -4211,7 +4211,7 @@ dependencies = [
 
 [[package]]
 name = "relay-queue"
-version = "0.4.13"
+version = "0.5.0"
 dependencies = [
  "axum",
  "chrono",
@@ -4234,7 +4234,7 @@ dependencies = [
 
 [[package]]
 name = "relay-replication"
-version = "0.4.13"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4251,7 +4251,7 @@ dependencies = [
 
 [[package]]
 name = "relay-shared-kernel"
-version = "0.4.13"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "serde",
@@ -4260,7 +4260,7 @@ dependencies = [
 
 [[package]]
 name = "relay-storage"
-version = "0.4.13"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "relay-shared-kernel",
