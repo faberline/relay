@@ -1,0 +1,166 @@
+# Hand-dispatched acceptance run on the shared GKE test cluster: deploys the
+# prebuilt candidate image and runs the raft_failover suite through aw's
+# gke-test.yml. Starts no run by itself (workflow_dispatch only).
+name: gke-acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Candidate image: ghcr.io/faberline/relay@sha256:<64 hex>"
+        required: true
+        type: string
+      commit:
+        description: "40-hex commit of main; must equal the commit this run uses"
+        required: true
+        type: string
+      test-client-image:
+        description: "ghcr.io/faberline/relay-test-client@sha256:<64 hex> of the ci run on that commit"
+        required: true
+        type: string
+
+run-name: "gke-acceptance relay @ ${{ github.sha }} image=${{ inputs.image }}"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-input:
+    name: Verify prebuilt image input
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the ref, the commit and the image forms
+        shell: bash
+        env:
+          REF: ${{ github.ref }}
+          RUN_SHA: ${{ github.sha }}
+          COMMIT: ${{ inputs.commit }}
+          IMAGE: ${{ inputs.image }}
+          CLIENT_IMAGE: ${{ inputs.test-client-image }}
+        run: |
+          set -euo pipefail
+          die() { echo "::error::$*" >&2; exit 1; }
+          [[ "$REF" == "refs/heads/main" ]] || die "ref must be refs/heads/main, got $REF"
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || die "commit must be 40 lowercase hex, got $COMMIT"
+          [[ "$COMMIT" == "$RUN_SHA" ]] || die "commit $COMMIT does not equal the run commit $RUN_SHA"
+          [[ "$IMAGE" =~ ^ghcr\.io/faberline/relay@sha256:[0-9a-f]{64}$ ]] \
+            || die "image must be ghcr.io/faberline/relay@sha256:<64 hex>, got: $IMAGE"
+          [[ "$CLIENT_IMAGE" =~ ^ghcr\.io/faberline/relay-test-client@sha256:[0-9a-f]{64}$ ]] \
+            || die "test-client-image must be ghcr.io/faberline/relay-test-client@sha256:<64 hex>, got: $CLIENT_IMAGE"
+
+  identity:
+    name: "gke-acceptance: resolve image identity"
+    needs: [verify-input]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      image: ${{ steps.identity.outputs.image }}
+      test-env: ${{ steps.identity.outputs.test_env }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Pin the image and its expected identity
+        id: identity
+        shell: bash
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          set -euo pipefail
+          die() { echo "::error::$*" >&2; exit 1; }
+          image="$IMAGE"
+          root_digest="${IMAGE#*@}"
+          git_sha="${GITHUB_SHA:0:8}"
+
+          version="$(grep '^version = ' Cargo.toml | head -n1 | cut -d'"' -f2)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || die "invalid version: $version"
+
+          # relay-test-image.yml pushes one linux/amd64 image. buildx may still
+          # wrap it in an index (attestations); then the amd64 child is what
+          # the node pulls. A plain manifest runs as the root digest itself.
+          raw="$(docker buildx imagetools inspect --raw "$image")"
+          if jq -e '.manifests? | type == "array"' <<<"$raw" >/dev/null; then
+            runtime_digest="$(jq -r '
+              [.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest] |
+              if length == 1 then .[0] else empty end' <<<"$raw")"
+          else
+            runtime_digest="$root_digest"
+          fi
+          [[ "$runtime_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || die "no single linux/amd64 digest for $image"
+
+          {
+            echo "image=${image}"
+            echo "test_env<<EOF"
+            echo "E2E_EXPECTED_VERSION=${version}"
+            echo "E2E_EXPECTED_GIT_SHA=${git_sha}"
+            echo "E2E_EXPECTED_IMAGE=${image}"
+            echo "E2E_EXPECTED_RUNTIME_DIGEST=${runtime_digest}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### relay gke-acceptance identity"
+            echo
+            echo '```text'
+            echo "image:          ${image}"
+            echo "version:        ${version}"
+            echo "git_sha:        ${git_sha}"
+            echo "runtime_digest: ${runtime_digest}"
+            echo "suite:          raft_failover"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  acceptance:
+    name: "gke-acceptance: raft_failover"
+    needs: [identity]
+    permissions:
+      id-token: write
+      contents: read
+      packages: read
+    uses: faberline/aw/.github/workflows/gke-test.yml@efe1a96e54617e60f6e2b7d154aea67fca8c96f8
+    with:
+      aw-ref: efe1a96e54617e60f6e2b7d154aea67fca8c96f8
+      image: ${{ needs.identity.outputs.image }}
+      image-name: ghcr.io/faberline/relay
+      namespace: relay
+      test-job: k8s/gke-test-job/raft_failover
+      test-image: ${{ inputs.test-client-image }}
+      test-image-name: relay-test-client
+      test-env: ${{ needs.identity.outputs.test-env }}
+      evidence-suffix: raft_failover
+      ttl-minutes: 60
+      queue-minutes: 60
+
+  acceptance-count:
+    name: Fail when no acceptance test ran
+    needs: [acceptance]
+    if: always() && needs.acceptance.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: gke-test-evidence-${{ github.run_id }}-${{ github.run_attempt }}-raft_failover
+          path: ${{ runner.temp }}/evidence
+
+      - name: Check the Job succeeded and at least one test passed
+        shell: bash
+        env:
+          EVIDENCE: ${{ runner.temp }}/evidence
+        run: bash scripts/ci/check-acceptance-count.sh "$EVIDENCE"
