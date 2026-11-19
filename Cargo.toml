@@ -11,7 +11,7 @@ members = ["crates/*"]
 # relay releases independently (relay@<version> tags). Every member inherits
 # this version; the release scripts and workflows read the first column-0
 # `version = "` line of this file.
-version = "0.4.13"
+version = "0.5.0"
 edition = "2021"
 authors = ["Faberline contributors"]
 license = "MIT"

@@ -58,7 +58,7 @@ with `kubectl` pointed at the target cluster.
    ```
 
 4. Declare the instance. The `prod` profile is the three-replica raft-HA CR
-   with auth on. Its default image is `registry.example.com/relay:0.4.13`, a
+   with auth on. Its default image is `registry.example.com/relay:0.5.0`, a
    placeholder, so pass the image you pushed with `--image`. Keep the default
    name `relay`: HA instances must use it.
 
