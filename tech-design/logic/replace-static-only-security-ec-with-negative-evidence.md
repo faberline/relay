@@ -13,7 +13,7 @@ capability_refs:
     gap: guard-static-runtime-evidence
     claim: guard-static-runtime-evidence
     coverage: full
-    rationale: The guard tool contract now attaches meter evidence from the full dynamic Relay security suite rather than relay_core.
+    rationale: The evidence driver contract now attaches meter evidence from the full dynamic Relay security suite rather than relay_core.
   - id: security-hardening
     role: primary
     gap: request-limit-and-malformed-frame-negative-tests
@@ -58,9 +58,9 @@ nodes:
   stability:
     kind: process
     label: "Stability keeps last-known-good auth on invalid rotation and trusted peers usable"
-  guard:
+  evidence:
     kind: process
-    label: "Vat guard scan attaches non-zero meter evidence from dynamic cases"
+    label: "Vat security evidence driver attaches non-zero meter evidence from dynamic cases"
   fail:
     kind: terminal
     label: "FAIL if untrusted peer is accepted or any journey is missing"
@@ -75,8 +75,8 @@ edges:
   - { from: handshake, to: reject, label: "rejected" }
   - { from: reject, to: k8s }
   - { from: k8s, to: stability }
-  - { from: stability, to: guard }
-  - { from: guard, to: pass }
+  - { from: stability, to: evidence }
+  - { from: evidence, to: pass }
 ---
 flowchart TD
     request[security evidence] --> behavior[auth RBAC and admission]
@@ -86,8 +86,8 @@ flowchart TD
     handshake -->|no| reject[reject before routing]
     reject --> k8s[restricted K8s posture]
     k8s --> stability[last-known-good rotation]
-    stability --> guard[vat guard plus dynamic meter]
-    guard --> pass[PASS dimensions]
+    stability --> evidence[vat security evidence plus dynamic meter]
+    evidence --> pass[PASS dimensions]
 ```
 ## Changes
 <!-- type: changes lang: yaml -->
@@ -120,7 +120,7 @@ changes:
     action: modify
     section: config
     impl_mode: hand-written
-    description: Build auth, service_admission, raft_peer_mtls, direct_k8s_assets, and service-auth reload tests, then make guard invoke the fail-closed evidence driver before Meter records the dynamic suites.
+    description: Build auth, service_admission, raft_peer_mtls, direct_k8s_assets, and service-auth reload tests, then make the evidence driver invoke the fail-closed evidence driver before Meter records the dynamic suites.
   - path: scripts/ec-evidence.sh
     action: create
     section: unit-test
@@ -154,10 +154,10 @@ requirements:
     verify: bash scripts/ec-evidence.sh security-boundaries
   guard_dispatch_includes_dynamic_suite:
     id: R5
-    text: "Vat guard scans Relay, the evidence driver requires named tests and non-zero auth, admission, peer-mTLS, K8s, and reload suites, and Meter records the same dynamic surfaces."
+    text: "Vat evidence driver scans Relay, the evidence driver requires named tests and non-zero auth, admission, peer-mTLS, K8s, and reload suites, and Meter records the same dynamic surfaces."
     kind: integration
     risk: high
-    verify: vat run guard-security
+    verify: vat run security-evidence
   rotation_and_peer_stability_execute:
     id: R4
     text: "Shared invalid registry reload retains the last-known-good snapshot, Relay valid rotation is live without restart, and trusted peer replication remains usable alongside the rejection path."
@@ -176,6 +176,6 @@ flowchart TD
     r2[R2 bearer and admission rejections execute] --> bash_apps_relay_scripts_ec_evidence_sh_security_behavior[bash scripts/ec-evidence.sh security-behavior]
     r3[R3 deployment security posture executes] --> bash_apps_relay_scripts_ec_evidence_sh_security_boundaries[bash scripts/ec-evidence.sh security-boundaries]
     r4[R4 rotation and peer stability execute] --> bash_apps_relay_scripts_ec_evidence_sh_security_stability[bash scripts/ec-evidence.sh security-stability]
-    r5[R5 guard dispatch includes dynamic suite] --> cd_apps_relay_target_debug_vat_run_guard_security[vat run guard-security]
+    r5[R5 evidence dispatch includes dynamic suite] --> cd_apps_relay_target_debug_vat_run_security_evidence[vat run security-evidence]
     r6[R6 agent review and ec verification close] --> aw_ec_check_project_relay_aw_ec_gen_project_relay_verify_aw_ec_verify_project_relay[aw ec check --project relay && aw ec gen --project relay --verify && aw ec verify --project relay]
 ```

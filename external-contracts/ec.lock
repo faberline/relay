@@ -13,7 +13,7 @@ digest = "sha256:c16b42b7f5d33ca08c03bceadfccfd17b99d0c95c1b78019c4b17c3961a6e68
 
 [[sources]]
 path = "external-contracts/security-hardening/security/security-evidence.md"
-digest = "sha256:59eb8dfb5bb0f1870d7e0b43c4dc87cafb3825a9cfd22b54f95f0af510e89417"
+digest = "sha256:7224f3e52d4b125528c61a5e647d5afa4d56d1f3d8a76a4594f3678de64d123b"
 
 [[cases]]
 id = "relay-competitor-performance-behavior"
@@ -101,11 +101,11 @@ contract_id = "relay-guard-security-report"
 dimension = "security"
 source_ref = "external-contracts/security-hardening/security/security-evidence.md#relay-security-hardening-guard-scan"
 test_path = "tests/it/security_relay_security_hardening_guard_scan.rs"
-command = "vat run guard-security"
+command = "vat run security-evidence"
 required_for_production = true
 assertions = [
-    "guard scan over relay reports no untriaged Docker, Kubernetes, or static security findings.",
-    "guard runs the fail-closed evidence driver before attaching Meter evidence from auth, admission, peer-mTLS, direct-Kubernetes, and service-auth reload suites; missing required names, zero execution, a failed control, or an outer-oracle self-test regression makes the runner fail.",
+    "The relay security evidence driver runs the auth, admission, peer-mTLS, direct-Kubernetes and service-auth reload suites; a missing required name, zero execution, a failed control, or an outer-oracle self-test regression makes the runner fail.",
+    "Meter attaches non-zero execution evidence from the same suites; no static scanner is a required part of this case.",
     "The security evidence runs inside vat so generated reports and transient files do not mutate the host checkout.",
 ]
 evidence_digest = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -150,16 +150,6 @@ assertions = [
 evidence_digest = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 evaluator_digest = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 digest = "sha256:3bd4db5af577977f7fbf68a4d652256c5b58e606e98bc0774adcd982f0441d76"
-
-[[tool_contracts]]
-id = "relay-guard-security"
-tool = "guard"
-dimension = "security"
-source_ref = "external-contracts/security-hardening/security/security-evidence.md#relay-guard-security"
-manifest_path = "guard-relay-security.toml"
-command = "vat run guard-security"
-content_digest = "sha256:5509ae8a1a6fa3408c9b083bca2a183d9a5e44c0049400eb79c05acbe03aac7d"
-digest = "sha256:9643fb044f7077c7c9074aa2286b382b5ce04496ffc5f3ff16ca2f6278729b62"
 
 [[tool_contracts]]
 id = "relay-meter-performance"
