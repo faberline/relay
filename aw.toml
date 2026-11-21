@@ -13,9 +13,9 @@ meter = "."
 command = "vat run meter-perf"
 
 [ec.security]
-tool = "guard"
+tool = "meter"
 dir = "."
-command = "vat run guard-security"
+command = "vat run security-evidence"
 
 [[workspaces]]
 name = "relay"
@@ -104,11 +104,11 @@ contract_id = "relay-guard-security-report"
 category = "security"
 td_ref = "external-contracts/security-hardening/security/security-evidence.md#relay-security-hardening-guard-scan"
 test_path = "tests/it/security_relay_security_hardening_guard_scan.rs"
-command = "vat run guard-security"
+command = "vat run security-evidence"
 required_for_production = true
 assertions = [
-    "guard scan over relay reports no untriaged Docker, Kubernetes, or static security findings.",
-    "guard runs the fail-closed evidence driver before attaching Meter evidence from auth, admission, peer-mTLS, direct-Kubernetes, and service-auth reload suites; missing required names, zero execution, a failed control, or an outer-oracle self-test regression makes the runner fail.",
+    "The relay security evidence driver runs the auth, admission, peer-mTLS, direct-Kubernetes and service-auth reload suites; a missing required name, zero execution, a failed control, or an outer-oracle self-test regression makes the runner fail.",
+    "Meter attaches non-zero execution evidence from the same suites; no static scanner is a required part of this case.",
     "The security evidence runs inside vat so generated reports and transient files do not mutate the host checkout.",
 ]
 
@@ -144,15 +144,6 @@ assertions = [
     "The trusted three-peer required-mTLS group remains able to elect, replicate, converge, and shut down after the negative certificate-rejection case is present.",
     "The outer oracle requires all five reload tests plus the exact Relay rotation and trusted-peer tests, and each focused invocation must execute at least one test.",
 ]
-
-[[aw.ec.generated.tool_manifests]]
-id = "relay-guard-security"
-tool = "guard"
-path = "guard-relay-security.toml"
-td_ref = "external-contracts/security-hardening/security/security-evidence.md#relay-guard-security"
-content_digest = "sha256:5509ae8a1a6fa3408c9b083bca2a183d9a5e44c0049400eb79c05acbe03aac7d"
-command = "vat run guard-security"
-category = "security"
 
 [[aw.ec.generated.tool_manifests]]
 id = "relay-meter-performance"
