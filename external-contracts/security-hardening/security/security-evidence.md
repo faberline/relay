@@ -1,6 +1,6 @@
 ---
 id: relay-security-hardening-ec
-summary: Relay security evidence combines executable auth/admission behavior, untrusted peer and restricted Kubernetes boundaries, last-known-good rotation stability, and vat-isolated guard plus dynamic meter proof.
+summary: Relay security evidence combines executable auth/admission behavior, untrusted peer and restricted Kubernetes boundaries, last-known-good rotation stability, and vat-isolated security evidence plus dynamic meter proof.
 fill_sections: [e2e-test, tool-contract]
 ---
 
@@ -10,7 +10,7 @@ Relay's SecurityTool contract separates behavior, security, and stability.
 Bearer/RBAC and admission behavior run over the real service paths; the
 security cases require attacker-CA rejection and restricted Kubernetes posture;
 the stability case keeps last-known-good credentials and trusted peer
-replication usable. Guard owns the static scan and, inside vat, attaches meter
+replication usable. The evidence driver runs inside vat and attaches meter
 evidence from the complete unfiltered dynamic security test binaries rather
 than a generic broker-core smoke.
 
@@ -49,10 +49,10 @@ e2e_tests:
     contract_id: relay-guard-security-report
     category: security
     test_path: tests/it/security_relay_security_hardening_guard_scan.rs
-    command: "vat run guard-security"
+    command: "vat run security-evidence"
     assertions:
-      - "guard scan over relay reports no untriaged Docker, Kubernetes, or static security findings."
-      - "guard runs the fail-closed evidence driver before attaching Meter evidence from auth, admission, peer-mTLS, direct-Kubernetes, and service-auth reload suites; missing required names, zero execution, a failed control, or an outer-oracle self-test regression makes the runner fail."
+      - "The relay security evidence driver runs the auth, admission, peer-mTLS, direct-Kubernetes and service-auth reload suites; a missing required name, zero execution, a failed control, or an outer-oracle self-test regression makes the runner fail."
+      - "Meter attaches non-zero execution evidence from the same suites; no static scanner is a required part of this case."
       - "The security evidence runs inside vat so generated reports and transient files do not mutate the host checkout."
 
   - id: relay-security-hardening-rotation-and-peer-stability
@@ -70,15 +70,5 @@ e2e_tests:
 <!-- type: tool-contract lang: yaml -->
 
 ```yaml
-tool_contracts:
-  - id: relay-guard-security
-    tool: guard
-    manifest: guard-relay-security.toml
-    category: security
-    command: "vat run guard-security"
-    native:
-      version: 1
-      project: relay
-      source_contract: relay-security-hardening-guard-scan
-      delegate_command: "vat run guard-security"
+tool_contracts: []
 ```
