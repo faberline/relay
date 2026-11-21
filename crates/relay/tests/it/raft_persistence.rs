@@ -407,6 +407,15 @@ fn state_machine_completed_proposals_restored_prevent_double_apply() {
 /// pre-bound listener per node, a per-node tempdir for `relay/` and `raft/`.
 const DEADLINE: Duration = Duration::from_secs(8);
 
+/// Raft tick of the `Group` nodes. The default 20 ms tick makes one election
+/// take at least 1 s of wall time; 10 ms gives the same 8 s `DEADLINE` twice
+/// the election timeouts.
+const GROUP_TICK: Duration = Duration::from_millis(10);
+
+fn group_host_config() -> raft_runtime::HostConfig {
+    RelayRaft::host_config(1024).with_tick(GROUP_TICK)
+}
+
 struct Node {
     raft: Arc<RelayRaft>,
     serve: tokio::task::JoinHandle<()>,
@@ -462,7 +471,7 @@ impl Group {
                 NodeId::new(id as u64),
                 self.membership.clone(),
                 peers,
-                RelayRaft::host_config(1024),
+                group_host_config(),
             )
             .unwrap(),
         );
@@ -505,12 +514,21 @@ impl Group {
         &self.nodes[id].as_ref().expect("node running").raft
     }
 
-    /// Stop the node: abort its serve loop and shut its host down. Its dirs stay.
+    /// Stop the node gracefully so that its open peer connections close (relay#206).
+    /// An abort of the serve loop alone leaves those connections talking to the
+    /// old node. Its dirs stay.
     async fn kill(&mut self, id: usize) {
         if let Some(mut n) = self.nodes[id].take() {
-            n.shutdown.take();
-            n.serve.abort();
-            let _ = n.serve.await;
+            if let Some(tx) = n.shutdown.take() {
+                let _ = tx.send(());
+            }
+            if tokio::time::timeout(Duration::from_secs(2), &mut n.serve)
+                .await
+                .is_err()
+            {
+                n.serve.abort();
+                let _ = n.serve.await;
+            }
             n.raft.shutdown().await.unwrap();
         }
     }
@@ -550,7 +568,7 @@ impl Group {
             }
             assert!(
                 Instant::now() < deadline,
-                "expected exactly one leader within 8 s, got {leaders:?}"
+                "expected exactly one leader within 8 s (tick {GROUP_TICK:?}), got {leaders:?}"
             );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -758,6 +776,196 @@ async fn three_voter_full_group_restart_keeps_history_and_elects() {
         );
     }
     g.shutdown().await;
+}
+
+/// Wait until every node holds `want` entries in subject `s` and all nodes
+/// report one applied index. Panics with `(id, applied_index, log_len)` of
+/// each node after `timeout`.
+async fn wait_all_equal(g: &Group, want: u64, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let state: Vec<(usize, u64, u64)> = g
+            .live()
+            .map(|(i, n)| {
+                (
+                    i,
+                    n.raft.applied_index().get(),
+                    n.raft.relay().log_len("s").unwrap(),
+                )
+            })
+            .collect();
+        if state.iter().all(|s| s.2 == want) && state.windows(2).all(|w| w[0].1 == w[1].1) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "stuck after rolling restart (id, applied_index, log_len): {state:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// relay#206: after a rolling restart of all three voters, every node must
+/// reach the same log length and applied index, and hold m0..m4 in order.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rolling_restart_leaves_no_voter_behind() {
+    let _guard = CLUSTER_TEST_LOCK.lock().await;
+    let mut g = Group::prepare(3).await;
+    g.start_all();
+    g.wait_single_leader().await;
+    for m in ["m0", "m1", "m2"] {
+        publish_until_committed(&g, m).await;
+    }
+    g.wait_converged(3).await;
+
+    for i in 0..3 {
+        g.kill(i).await;
+        g.start_node(i);
+        g.wait_single_leader().await;
+    }
+
+    for m in ["m3", "m4"] {
+        publish_until_committed(&g, m).await;
+    }
+    wait_all_equal(&g, 5, Duration::from_secs(30)).await;
+
+    let want = ids(&["m0", "m1", "m2", "m3", "m4"]);
+    for i in 0..3 {
+        assert_eq!(g.message_ids(i), want, "node {i} holds m0..m4 in order");
+    }
+    g.shutdown().await;
+}
+
+/// Polls until every live node holds exactly `want` entries, reports the same
+/// applied index, and that index is at least `want + 1` (the core v0.5.0
+/// leader appends one Noop entry per term). Returns the shared applied index.
+async fn wait_exact(g: &Group, want: u64, step: &str) -> u64 {
+    let deadline = Instant::now() + DEADLINE;
+    loop {
+        let rows: Vec<(usize, u64, u64)> = g
+            .live()
+            .map(|(i, n)| {
+                (
+                    i,
+                    n.raft.applied_index().get(),
+                    n.raft.relay().log_len("s").unwrap(),
+                )
+            })
+            .collect();
+        let ok = rows
+            .iter()
+            .all(|r| r.2 == want && r.1 > want && r.1 == rows[0].1);
+        if ok {
+            return rows[0].1;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{step}: want log_len {want}, one shared applied_index above {want}; nodes (id, applied_index, log_len): {rows:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Every live node holds exactly the message ids `want`, in order, no duplicate.
+fn assert_ids(g: &Group, want: &[&str], step: &str) {
+    let want = ids(want);
+    for (i, _) in g.live() {
+        assert_eq!(g.message_ids(i), want, "{step}: node {i} message ids");
+    }
+}
+
+/// Claim `raft-hard-state-restart-safety` (issue 18, issue 201): a three-voter
+/// group keeps its hard state across a follower restart, a leader restart and a
+/// rolling restart of all voters: the applied index never goes back, nothing is
+/// applied twice, one leader remains and no committed publish is lost.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn restarted_voters_rejoin_with_hard_state_intact() {
+    let _guard = CLUSTER_TEST_LOCK.lock().await;
+    let mut g = Group::prepare(3).await;
+    g.start_all();
+
+    // Step 1: elect a leader, publish three messages, every node holds 3.
+    let leader = g.wait_single_leader().await;
+    for m in ["m0", "m1", "m2"] {
+        let (_, out) =
+            g.raft(leader).publish(&cmd(m)).await.unwrap_or_else(|e| {
+                panic!("step 1: publish {m} via leader {leader} failed: {e:#}")
+            });
+        assert!(
+            !out.expect("leader claims outcome").deduped,
+            "step 1: publish {m} via leader {leader} was deduped"
+        );
+    }
+    wait_exact(&g, 3, "step 1 initial publish").await;
+
+    // Step 2: follower restart. Record its applied index before the kill.
+    let leader = g.wait_single_leader().await;
+    let follower = (0..3).find(|i| *i != leader).expect("a follower");
+    let before = g.raft(follower).applied_index().get();
+    g.kill(follower).await;
+    g.start_node(follower);
+    g.wait_single_leader().await;
+    let applied = wait_exact(&g, 3, "step 2 follower restart").await;
+    assert!(
+        applied >= before,
+        "step 2: node {follower} applied_index went back from {before} to {applied}"
+    );
+
+    // Step 3: leader restart. Record its applied index before the kill.
+    let leader = g.wait_single_leader().await;
+    let before = g.raft(leader).applied_index().get();
+    g.kill(leader).await;
+    g.start_node(leader);
+    g.wait_single_leader().await;
+    let (retried, deduped) = publish_until_committed(&g, "m3").await;
+    assert!(!deduped || retried, "step 3: publish m3 was deduped");
+    let applied = wait_exact(&g, 4, "step 3 publish after leader restart").await;
+    assert!(
+        applied >= before,
+        "step 3: node {leader} applied_index went back from {before} to {applied}"
+    );
+    assert_ids(&g, &["m0", "m1", "m2", "m3"], "step 3 after leader restart");
+
+    // Step 4: restart all three voters one after another, then publish once more.
+    let before = applied;
+    for id in 0..3 {
+        g.kill(id).await;
+        g.start_node(id);
+    }
+    g.wait_single_leader().await;
+    let (retried, deduped) = publish_until_committed(&g, "m4").await;
+    assert!(!deduped || retried, "step 4: publish m4 was deduped");
+    let applied = wait_exact(&g, 5, "step 4 publish after rolling restart").await;
+    assert!(
+        applied > before,
+        "step 4: applied_index did not advance after m4: {applied} <= {before}"
+    );
+    assert_ids(
+        &g,
+        &["m0", "m1", "m2", "m3", "m4"],
+        "step 4 after rolling restart",
+    );
+
+    // Step 5: an already published id dedupes and the log does not grow.
+    let leader = g.wait_single_leader().await;
+    let (_, dup) = g
+        .raft(leader)
+        .publish(&cmd("m0"))
+        .await
+        .unwrap_or_else(|e| panic!("step 5: re-publish m0 via leader {leader} failed: {e:#}"));
+    assert!(
+        dup.expect("outcome").deduped,
+        "step 5: re-publish of m0 via leader {leader} was not deduped"
+    );
+    wait_exact(&g, 5, "step 5 re-publish of m0").await;
+
+    g.shutdown().await;
+}
+
+#[test]
+fn group_nodes_use_the_fast_election_tick() {
+    assert_eq!(group_host_config().tick(), Duration::from_millis(10));
+    assert!(group_host_config().tick() < raft_runtime::HostConfig::default().tick());
 }
 
 // HANDWRITE-END

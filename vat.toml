@@ -7,12 +7,9 @@ base = "."
 workdir = "."
 keep = "always"
 
-[env]
-PATH = "/Users/chrischeng/.rustup/toolchains/stable-aarch64-apple-darwin/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Users/chrischeng/.cargo/bin"
-
 [[setup]]
 id = "build-aw-tools"
-cmd = ["sh", "-c", "command -v meter >/dev/null && command -v guard >/dev/null || { echo \"install the gate tools: cargo install --locked --git https://github.com/faberline/meter meter-cli; cargo install --locked --git https://github.com/faberline/guard guard-cli\" >&2; exit 1; }"]
+cmd = ["sh", "-c", "command -v meter >/dev/null || { echo \"install the gate tool: cargo install --locked --git https://github.com/faberline/meter meter-cli\" >&2; exit 1; }"]
 
 [[setup]]
 id = "build-relay-security-ec-tests"
@@ -45,16 +42,6 @@ cmd = ["bash", "scripts/ec-evidence.sh", "performance-efficiency"]
 timeout_s = 600
 
 [[runners]]
-id = "guard-security"
-cmd = [
-  "guard",
-  "scan",
-  ".",
-  "--profile",
-  "security-lint",
-  "--compact",
-  "--no-persist",
-  "--meter-command",
-  "bash scripts/ec-evidence.sh security-guard",
-]
+id = "security-evidence"
+cmd = ["bash", "scripts/ec-evidence.sh", "security-evidence"]
 timeout_s = 600

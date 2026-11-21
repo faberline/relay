@@ -22,4 +22,10 @@ Keep all feature matrices, test selection checks and numeric limits.
 
 | Gate | Command |
 |---|---|
-| unit + colocated tests | `cargo test -p relay` |
+| format | `cargo fmt --all -- --check` |
+| lint | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
+| dependency audit | `cargo deny check advisories bans licenses sources` |
+| tests (workspace) | `cargo test --locked --workspace` |
+| lint, all features | `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` |
+| tests, all features | `cargo test --locked --workspace --all-features` |
+| release contract | `uv run --python 3.13 --no-project scripts/release/verify-release-contract.py --app relay`; `uv run --python 3.13 --no-project scripts/release/verify-release-contract.py --self-test`; `uv run --python 3.13 --no-project scripts/release/make-gke-release-receipt.py --self-test` |

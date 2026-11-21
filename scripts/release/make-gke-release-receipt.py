@@ -31,10 +31,13 @@ from typing import Any, Callable, Dict, NoReturn, Optional, Tuple
 
 REPOSITORY = "faberline/relay"
 IMAGE_OWNER = "ghcr.io/faberline"
-ACCEPTANCE_JOB = "deploy + verify on GKE"
-VERIFY_IMAGE_STEP = "Verify prebuilt image input"
-HARNESS_STEP = "Run acceptance harness"
-PARK_STEP = "Park node pool (belt and suspenders)"
+VERIFY_INPUT_JOB = "Verify prebuilt image input"
+IDENTITY_JOB = "gke-acceptance: resolve image identity"
+ACCEPTANCE_JOB = "gke-acceptance: raft_failover / deploy + test on shared GKE"
+COUNT_JOB = "Fail when no acceptance test ran"
+DEPLOY_STEP = "Deploy, test, and tear down"
+UPLOAD_STEP = "Upload evidence"
+TEARDOWN_STEP = "Tear down (backup)"
 HARNESS_FIELDS = ("readyz", "round_trip", "durability")
 SIFT_FIELDS = (
     "operator_reconcile_1x1",
@@ -293,37 +296,48 @@ def validate_gke_acceptance(
     jobs = gh_run["jobs"]
     if not isinstance(jobs, list) or not jobs:
         fail("run has no job inventory")
-    acceptance_jobs = [job for job in jobs if isinstance(job, dict) and job.get("name") == ACCEPTANCE_JOB]
-    if len(acceptance_jobs) != 1:
-        fail("run does not contain exactly one acceptance job")
-    job = acceptance_jobs[0]
-    if job.get("status") != "completed" or job.get("conclusion") != "success":
-        fail("acceptance job did not conclude success")
+    if not all(isinstance(job, dict) for job in jobs):
+        fail("run job inventory is invalid")
+    expected_jobs = sorted((VERIFY_INPUT_JOB, IDENTITY_JOB, ACCEPTANCE_JOB, COUNT_JOB))
+    if sorted(str(job.get("name")) for job in jobs) != expected_jobs:
+        fail("run must contain exactly the four gke-acceptance jobs, each once and no other job")
+    for other in jobs:
+        if other.get("status") != "completed" or other.get("conclusion") != "success":
+            fail(f"gke-acceptance job did not conclude success: {other.get('name')}")
+    job = next(other for other in jobs if other.get("name") == ACCEPTANCE_JOB)
     steps = {step.get("name"): step for step in job.get("steps", []) if isinstance(step, dict)}
-    for name in (VERIFY_IMAGE_STEP, HARNESS_STEP, PARK_STEP):
+    for name in (DEPLOY_STEP, UPLOAD_STEP, TEARDOWN_STEP):
         if steps.get(name, {}).get("conclusion") != "success":
             fail(f"acceptance step did not conclude success: {name}")
-    for other in jobs:
-        if other is job:
-            continue
-        if not isinstance(other, dict) or other.get("conclusion") != "skipped":
-            fail("a build job ran; the candidate image must be the only image in play")
     if evidence_dir.is_symlink() or not evidence_dir.is_dir():
         fail("evidence directory is invalid")
-    results = read_regular(evidence_dir / "results.txt", "harness results")
-    if results != f"{app} PASS\n".encode():
-        fail("harness results do not record exactly one PASS for this app")
-    verdict = read_regular(evidence_dir / app / "verdict.txt", "harness verdict")
-    if verdict != f"[{app}] PASS: readyz + round-trip + durability\n".encode():
-        fail("harness verdict is not the exact PASS line")
-    manifests = read_regular(evidence_dir / app / "manifests.yaml", "rendered manifests")
+    rendered = read_regular(evidence_dir / "rendered.yaml", "rendered manifests")
     try:
-        lines = manifests.decode().splitlines()
+        lines = rendered.decode().splitlines()
     except UnicodeDecodeError:
         fail("rendered manifests are not UTF-8")
     if not any(line.strip() == f"image: {image}" for line in lines):
         fail("rendered manifests do not deploy the candidate image")
-    read_regular(evidence_dir / app / "teardown.log", "teardown log")
+    status = read_regular(evidence_dir / "test-job-status.yaml", "test Job status")
+    try:
+        status_lines = status.decode().splitlines()
+    except UnicodeDecodeError:
+        fail("test Job status is not UTF-8")
+    succeeded = next((m.group(1) for m in (re.match(r"^\s*succeeded:\s*(\S*)", line) for line in status_lines) if m), None)
+    if succeeded != "1":
+        fail("test Job did not succeed")
+    logs = sorted(
+        (path for path in evidence_dir.glob("logs-*.txt") if not path.name.endswith("-previous.txt")),
+        key=lambda path: path.name,
+    )
+    log_bytes = [read_regular(path, "test Job log") for path in logs]
+    passed = [
+        int(n)
+        for raw in log_bytes
+        for n in re.findall(rb"test result: ok\. (\d+) passed", raw)
+    ]
+    if not passed or max(passed) < 1:
+        fail("no test log shows a passed test")
     run_id = f"gha-{run_number}-{attempt}"
     functional = {field: "passed" for field in HARNESS_FIELDS}
     cleanup = {
@@ -332,10 +346,13 @@ def validate_gke_acceptance(
         "namespace_deleted": True,
         "node_pool_parked": True,
     }
+    # The key names are kept, so the release verifier needs no change:
+    # manifests_sha256 is rendered.yaml, results_sha256 is test-job-status.yaml,
+    # and verdict_sha256 is the Job logs (sorted by file name, joined).
     evidence = {
-        "manifests_sha256": sha256(manifests),
-        "results_sha256": sha256(results),
-        "verdict_sha256": sha256(verdict),
+        "manifests_sha256": sha256(rendered),
+        "results_sha256": sha256(status),
+        "verdict_sha256": sha256(b"".join(log_bytes)),
     }
     return run_id, run_url, functional, cleanup, evidence
 
@@ -493,40 +510,35 @@ def fixture_gke_acceptance(app: str, commit: str, image: str) -> Dict[str, Any]:
         "headSha": commit,
         "displayTitle": f"gke-acceptance {app} @ {commit} image={image}",
         "jobs": [
-            {"name": "build-keep", "status": "completed", "conclusion": "skipped", "steps": []},
-            {"name": "build-defer", "status": "completed", "conclusion": "skipped", "steps": []},
-            {"name": "build-relay", "status": "completed", "conclusion": "skipped", "steps": []},
-            {"name": "build-loom", "status": "completed", "conclusion": "skipped", "steps": []},
+            {"name": VERIFY_INPUT_JOB, "status": "completed", "conclusion": "success", "steps": []},
+            {"name": IDENTITY_JOB, "status": "completed", "conclusion": "success", "steps": []},
             {
                 "name": ACCEPTANCE_JOB,
                 "status": "completed",
                 "conclusion": "success",
                 "steps": [
                     step("Set up job"),
-                    step("Run actions/checkout@v4"),
-                    step(VERIFY_IMAGE_STEP),
-                    step("Prepare evidence directory"),
-                    step("Authenticate to GCP (Workload Identity Federation)"),
-                    step("Set up gcloud + GKE auth plugin"),
-                    step(HARNESS_STEP),
-                    step("Upload evidence bundle"),
-                    step(PARK_STEP),
+                    step(DEPLOY_STEP),
+                    step(UPLOAD_STEP),
+                    step(TEARDOWN_STEP),
+                    step("Release the turn"),
                 ],
             },
+            {"name": COUNT_JOB, "status": "completed", "conclusion": "success", "steps": []},
         ],
     }
 
 
 def write_harness_evidence(app: str, evidence_dir: Path, image: str) -> None:
-    (evidence_dir / app).mkdir(parents=True, exist_ok=True)
+    evidence_dir.mkdir(parents=True, exist_ok=True)
     (evidence_dir / "kubeconfig").write_text("apiVersion: v1\nkind: Config\nusers: [{name: redacted}]\n")
     (evidence_dir / "cluster-name.txt").write_text("axiom-acceptance\n")
-    (evidence_dir / "results.txt").write_text(f"{app} PASS\n")
-    (evidence_dir / app / "verdict.txt").write_text(f"[{app}] PASS: readyz + round-trip + durability\n")
-    (evidence_dir / app / "manifests.yaml").write_text(
+    (evidence_dir / "rendered.yaml").write_text(
         f"apiVersion: apps/v1\nkind: StatefulSet\nspec:\n  template:\n    spec:\n      containers:\n      - name: {app}\n        image: {image}\n"
     )
-    (evidence_dir / app / "teardown.log").write_text("namespace deleted\n")
+    (evidence_dir / "test-job-status.yaml").write_text("status:\n  succeeded: 1\n")
+    (evidence_dir / f"logs-{app}-0.txt").write_text("ok\n")
+    (evidence_dir / f"logs-{app}-test-0.txt").write_text("test result: ok. 3 passed; 0 failed\n")
 
 
 def fixture_gcp(app: str, commit: str, image: str) -> Dict[str, Dict[str, Any]]:
@@ -650,10 +662,14 @@ def self_test() -> None:
         mutated_gh("other workflow", lambda r: r.update(workflowName="relay-test-image"))
         mutated_gh("push event", lambda r: r.update(event="push"))
         mutated_gh("foreign url", lambda r: r.update(url="https://github.com/someone/else/actions/runs/99001"))
-        mutated_gh("build job ran", lambda r: r["jobs"][0].update(conclusion="success"))
-        mutated_gh("park step failed", lambda r: find_step(r, PARK_STEP).update(conclusion="failure"))
-        mutated_gh("verify image step skipped", lambda r: find_step(r, VERIFY_IMAGE_STEP).update(conclusion="skipped"))
-        mutated_gh("harness step absent", lambda r: acceptance_job(r)["steps"].remove(find_step(r, HARNESS_STEP)))
+        def job_named(record: Dict[str, Any], name: str) -> Dict[str, Any]:
+            return next(job for job in record["jobs"] if job["name"] == name)
+
+        mutated_gh("extra job ran", lambda r: r["jobs"].append({"name": "build-relay", "status": "completed", "conclusion": "success", "steps": []}))
+        mutated_gh("acceptance-count skipped", lambda r: job_named(r, COUNT_JOB).update(conclusion="skipped"))
+        mutated_gh("deploy step failed", lambda r: find_step(r, DEPLOY_STEP).update(conclusion="failure"))
+        mutated_gh("teardown step failed", lambda r: find_step(r, TEARDOWN_STEP).update(conclusion="failure"))
+        mutated_gh("upload step skipped", lambda r: find_step(r, UPLOAD_STEP).update(conclusion="skipped"))
         mutated_gh("acceptance job failed", lambda r: acceptance_job(r).update(conclusion="failure"))
         mutated_gh("two acceptance jobs", lambda r: r["jobs"].append(copy.deepcopy(acceptance_job(r))))
 
@@ -668,12 +684,17 @@ def self_test() -> None:
         def drop(path: Path) -> None:
             path.rename(path.with_name(path.name + ".absent"))
 
-        mutated_evidence("verdict FAIL", lambda p: (p / app / "verdict.txt").write_text(f"[{app}] FAIL: readyz\n"))
-        mutated_evidence("results FAIL", lambda p: (p / "results.txt").write_text(f"{app} FAIL\n"))
-        mutated_evidence("results extra app", lambda p: (p / "results.txt").write_text(f"{app} PASS\nrelay PASS\n"))
-        mutated_evidence("manifests other image", lambda p: (p / app / "manifests.yaml").write_text(f"image: {IMAGE_OWNER}/{app}:latest\n"))
-        mutated_evidence("teardown missing", lambda p: drop(p / app / "teardown.log"))
-        mutated_evidence("verdict missing", lambda p: drop(p / app / "verdict.txt"))
+        mutated_evidence("rendered other image", lambda p: (p / "rendered.yaml").write_text(f"image: {IMAGE_OWNER}/{app}:latest\n"))
+        mutated_evidence("test job not succeeded", lambda p: (p / "test-job-status.yaml").write_text("status:\n  succeeded: 0\n"))
+        mutated_evidence("test-job-status missing", lambda p: drop(p / "test-job-status.yaml"))
+        mutated_evidence("no test passed", lambda p: ((p / f"logs-{app}-test-0.txt").write_text("ok\n")))
+        mutated_evidence("zero tests passed", lambda p: (p / f"logs-{app}-test-0.txt").write_text("test result: ok. 0 passed; 0 failed\n"))
+
+        def drop_logs(p: Path) -> None:
+            drop(p / f"logs-{app}-0.txt")
+            drop(p / f"logs-{app}-test-0.txt")
+
+        mutated_evidence("logs missing", drop_logs)
 
         def mutated_manifest(label: str, mutate: Callable[[Dict[str, Any]], None]) -> None:
             nonlocal negative

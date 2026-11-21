@@ -13,12 +13,12 @@ How to run, configure, and test relay.
 | [threat-model.md](../security/threat-model.md) | Assets, trust boundaries, the threats with their controls and tests, and what the model leaves out. |
 | [upgrade.md](upgrade.md) | Version compatibility policy and the rolling-upgrade order. |
 | [performance.md](performance.md) | Recorded throughput, latency and resource numbers, the gate thresholds and the SBOM. |
+| [perf-publish-p95-analysis.md](perf-publish-p95-analysis.md) | Publish p95 of the durable gate on Linux, before and after #198, and the Mac cause (a sync per frame). |
 | [worker-protocol.md](../worker-protocol.md) | The HTTP/2 + OpenAPI contract that workers in any language use. |
 | [perf-gate.md](../perf-gate.md) | The competitor perf gate and how to run it. |
 | [restart-failover-soak.md](restart-failover-soak.md) | The restart, persistence, backup and bounded soak gate (`scripts/verify-restart-failover-soak.sh`) and its last recorded result. |
 | [container-kustomize-verification.md](container-kustomize-verification.md) | The offline gate for the container and Kustomize artifacts and its last result. |
 | [competitor-efficiency.md](competitor-efficiency.md) | The local competitor semantics and efficiency gate (`scripts/verify-competitor-efficiency.sh`) and its last recorded result. |
-| [core-reuse.md](core-reuse.md) | The S4 core-reuse check (CR0 to CR8) for relay: the result, the date and the command. |
 
 ## Tests
 

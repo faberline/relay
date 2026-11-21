@@ -250,7 +250,7 @@ fn gke_test_overlay_is_three_voter_auto_mode() {
     assert_eq!(env(patch, "VOTER_COUNT")["value"], "3");
     assert_eq!(
         patch["spec"]["template"]["spec"]["containers"][0]["image"],
-        "ghcr.io/faberline/relay"
+        "ghcr.io/faberline/relay:REPLACE_ME"
     );
     let overlay = &overlay[0];
     assert_eq!(overlay["resources"][0], "../../base");

@@ -24,6 +24,7 @@ ignore = [
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error 1.0.4 unmaintained; no fixed version" },
     { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile 2.2.0 unmaintained; no fixed version" },
     { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml unmaintained, via serde_yaml; no fixed version" },
+    { id = "RUSTSEC-2026-0543", reason = "chrono 0.4.44 unmaintained; no fixed version. Direct dependency of the relay crates; also via k8s-openapi and kube. Review when chrono, k8s-openapi or kube move" },
 ]
 
 [licenses]
@@ -141,4 +142,4 @@ external-default-features = "allow"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = ["https://github.com/faberline/core?tag=v0.5.0"]
+allow-git = ["https://github.com/faberline/core?tag=v0.5.1"]
