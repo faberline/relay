@@ -167,7 +167,8 @@ engine.
 - Behavior: `bash scripts/ec-evidence.sh security-behavior`
 - Boundaries: `bash scripts/ec-evidence.sh security-boundaries`
 - Stability: `bash scripts/ec-evidence.sh security-stability`
-- Static + runtime scan: `vat run guard-security`
+- Runtime evidence (auth, admission, peer mTLS, direct Kubernetes, reload): `vat run security-evidence`
+- Static supply-chain check: `aw security check` (standard S10, warning only)
 
 #### Stateful service workload
 
