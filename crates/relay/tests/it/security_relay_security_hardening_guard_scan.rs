@@ -7,16 +7,16 @@
 // @contract relay-guard-security-report
 // @category security
 // @required_for_production true
-// @command vat run guard-security
+// @command vat run security-evidence
 // AW-EC-END
 
-// Contract: guard scan over relay reports no untriaged Docker, Kubernetes, or static security findings.
-// Contract: guard runs the fail-closed evidence driver before attaching Meter evidence from auth, admission, peer-mTLS, direct-Kubernetes, and service-auth reload suites; missing required names, zero execution, a failed control, or an outer-oracle self-test regression makes the runner fail.
+// Contract: The relay security evidence driver runs the auth, admission, peer-mTLS, direct-Kubernetes and service-auth reload suites; a missing required name, zero execution, a failed control, or an outer-oracle self-test regression makes the runner fail.
+// Contract: Meter attaches non-zero execution evidence from the same suites; no static scanner is a required part of this case.
 // Contract: The security evidence runs inside vat so generated reports and transient files do not mutate the host checkout.
 #[test]
 #[ignore = "AW EC gate: run via `aw health --verify-ec` or `cargo test -- --ignored`"]
 fn relay_security_hardening_guard_scan() {
-    let command = "vat run guard-security";
+    let command = "vat run security-evidence";
     let id = "relay-security-hardening-guard-scan";
     let mut root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     while !root.join(".aw").is_dir() {
