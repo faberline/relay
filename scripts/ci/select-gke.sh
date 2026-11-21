@@ -30,7 +30,7 @@ no_gke() {
     docs/* | tech-design/* | external-contracts/* | clients/* | scripts/* \
       | .claude/* | .codex/* | *.md \
       | LICENSE | .gitignore | clippy.toml | deny.toml | vat.toml \
-      | meter-relay-performance.toml | guard-relay-security.toml | ddd.toml \
+      | meter-relay-performance.toml | ddd.toml \
       | crates/*/tests/*)
       return 0 ;;
     *)

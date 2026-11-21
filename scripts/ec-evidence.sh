@@ -241,7 +241,7 @@ security_stability() {
       raft_peer_mtls::trusted_relay_peers_replicate_messages_over_mtls -- --exact --nocapture
 }
 
-security_guard() {
+security_evidence() {
   security_behavior
   security_boundaries
   security_reload
@@ -266,9 +266,9 @@ case "$mode" in
   security-behavior) security_behavior ;;
   security-boundaries) security_boundaries ;;
   security-stability) security_stability ;;
-  security-guard) security_guard ;;
+  security-evidence) security_evidence ;;
   self-test) ;;
-  *) fail "usage: $0 performance-behavior|performance-efficiency|security-behavior|security-boundaries|security-stability|security-guard|self-test" ;;
+  *) fail "usage: $0 performance-behavior|performance-efficiency|security-behavior|security-boundaries|security-stability|security-evidence|self-test" ;;
 esac
 echo "RELAY_EC_ORACLE mode=${mode} state=passed"
 
