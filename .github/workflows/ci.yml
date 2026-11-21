@@ -45,7 +45,7 @@ jobs:
   lint:
     name: "lint: fmt, clippy"
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -78,6 +78,11 @@ jobs:
           uv run --python 3.13 --no-project scripts/release/make-gke-release-receipt.py --self-test
       - name: Selection rule test
         run: bash scripts/ci/select-gke.test.sh
+      - name: Security check (S10, warning only)
+        continue-on-error: true
+        run: |
+          cargo install --locked --git https://github.com/faberline/aw --rev df440b3884f52569a2facf1eecdb12275ae77c33 aw
+          aw security check --dir .
 
   test-workspace:
     name: "test: workspace"
