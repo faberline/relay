@@ -14,7 +14,7 @@ relay is the online single-cast pull work-queue broker of the faberline stack (p
 
 - `README.md` is the promise of `relay` and the work roots it owns. Read it before a change. A change keeps the behavior that `README.md` promises.
 - This repository is public. Never write a secret, token, private host name, e-mail address or personal path in a file, a commit, an issue or a pull request.
-- A GKE run costs money. Never start one, and never add a node pool, without the owner's approval (see `CONTRIBUTING.md`).
+- The GKE e2e jobs cost money. On a pull request, CI runs them only when `scripts/ci/select-gke.sh` finds a changed path that can affect the GKE suite. Nothing in this repository creates cloud resources (see the header of `.github/workflows/ci.yml`).
 
 ## Issue work
 
