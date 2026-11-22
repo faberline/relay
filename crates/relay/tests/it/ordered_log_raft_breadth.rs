@@ -56,10 +56,6 @@ impl Cluster {
         }
     }
 
-    fn leave_listener_unbound_until_start(&mut self, id: usize) {
-        drop(self.listeners[id].take());
-    }
-
     fn start_node(&mut self, id: usize, snapshot_every: u64) {
         let engine = Arc::new(Relay::new(RelayCoreConfig {
             data_dir: self._dirs[id]
@@ -87,19 +83,9 @@ impl Cluster {
             .unwrap(),
         );
         let app = raft.router();
-        let listener = match self.listeners[id].take() {
-            Some(listener) => listener,
-            None => {
-                let address = self.urls[&(id as u64)]
-                    .strip_prefix("http://")
-                    .unwrap()
-                    .parse::<std::net::SocketAddr>()
-                    .unwrap();
-                let listener = std::net::TcpListener::bind(address).unwrap();
-                listener.set_nonblocking(true).unwrap();
-                tokio::net::TcpListener::from_std(listener).unwrap()
-            }
-        };
+        let listener = self.listeners[id]
+            .take()
+            .expect("listener bound in prepare and not yet taken");
         let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
         let serve = tokio::spawn(async move {
             let _ = axum::serve(listener, app)
@@ -195,8 +181,6 @@ impl Cluster {
 async fn ordered_log_queue_and_raft_feature_breadth() {
     let _guard = CLUSTER_TEST_LOCK.lock().await;
     let mut c = Cluster::prepare(3, 1).await;
-    // Leave learner unbound until it is added to the cluster.
-    c.leave_listener_unbound_until_start(3);
     c.start_node(0, 1024);
     c.start_node(1, 1024);
     c.start_node(2, 1024);
