@@ -8,6 +8,10 @@ spec:
   replicas: 3
   template:
     spec:
+      # Pod-level non-root; k8s/base/statefulset.yaml sets the same, so the
+      # merged StatefulSet does not change.
+      securityContext:
+        runAsNonRoot: true
       nodeSelector:
         faberline.dev/pool: relay-server
       tolerations:
@@ -26,8 +30,9 @@ spec:
       containers:
         - name: relay
           # The base's relay:<version> is a local name; the images entry in
-          # kustomization.yaml pins this one to the image under test.
-          image: ghcr.io/faberline/relay
+          # kustomization.yaml replaces this name and tag with the image under
+          # test.
+          image: ghcr.io/faberline/relay:REPLACE_ME
           env:
             - {name: REPLICAS_PER_SHARD, value: "3"}
             - {name: VOTER_COUNT, value: "3"}
@@ -38,5 +43,7 @@ spec:
     - metadata: {name: data}
       spec:
         accessModes: ["ReadWriteOnce"]
+        # N4 nodes take only Hyperdisk, and hyperdisk-balanced needs at least 4Gi.
+        storageClassName: dynamic-rwo
         resources:
-          requests: {storage: 1Gi}
+          requests: {storage: 4Gi}

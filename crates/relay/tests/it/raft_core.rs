@@ -13,8 +13,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::Utc;
 
-use raft_core::{auto_membership, AppendResp, NodeId, RaftMsg, RaftNode, Role};
+use raft_core::{auto_membership, AppendResp, Index, NodeId, RaftMsg, RaftNode, Role, Term};
 use relay::{Relay, RelayCoreConfig};
+
+/// The node ids `0..n`, typed.
+fn node_ids(n: u64) -> Vec<NodeId> {
+    (0..n).map(NodeId::new).collect()
+}
 
 /// A deterministic cluster: owns the nodes, pumps messages, and records every
 /// committed command per node (the "apply" side of the state machine).
@@ -27,8 +32,10 @@ struct Cluster {
 impl Cluster {
     fn new(n: u64) -> Cluster {
         let m = auto_membership(n);
-        let nodes = (0..n).map(|id| (id, RaftNode::new(id, &m))).collect();
-        let applied = (0..n).map(|id| (id, Vec::new())).collect();
+        let nodes = (0..n)
+            .map(|id| (NodeId::new(id), RaftNode::new(NodeId::new(id), &m)))
+            .collect();
+        let applied = (0..n).map(|id| (NodeId::new(id), Vec::new())).collect();
         Cluster {
             nodes,
             dropped: HashSet::new(),
@@ -135,9 +142,9 @@ fn replicates_and_commits_in_order() {
         c.propose(vec![i]);
     }
     let expected: Vec<Vec<u8>> = (0..5u8).map(|i| vec![i]).collect();
-    for id in 0..3 {
+    for id in node_ids(3) {
         assert_eq!(c.applied[&id], expected, "node {id} applied all in order");
-        assert!(c.nodes[&id].commit_index() >= 5);
+        assert!(c.nodes[&id].commit_index().get() >= 5);
     }
 }
 
@@ -157,7 +164,7 @@ fn kill_leader_reelects_with_no_committed_loss() {
     assert_ne!(new, old, "a different node leads");
 
     // Every survivor still has the pre-kill committed entries (no loss)...
-    for id in (0..3).filter(|id| *id != old) {
+    for id in node_ids(3).into_iter().filter(|id| *id != old) {
         assert_eq!(
             &c.applied[&id][..3],
             &committed_before[..],
@@ -166,7 +173,7 @@ fn kill_leader_reelects_with_no_committed_loss() {
     }
     // ...and the new leader can commit fresh entries.
     c.propose(vec![99]);
-    for id in (0..3).filter(|id| *id != old) {
+    for id in node_ids(3).into_iter().filter(|id| *id != old) {
         assert_eq!(c.applied[&id].last(), Some(&vec![99u8]));
     }
 }
@@ -175,25 +182,28 @@ fn kill_leader_reelects_with_no_committed_loss() {
 fn learner_replicates_but_never_votes_or_counts() {
     // N=4 -> voters {0,1,2}, learner {3}.
     let m = auto_membership(4);
-    assert_eq!(m.voters, vec![0, 1, 2]);
-    assert_eq!(m.learners, vec![3]);
+    assert_eq!(m.voters(), &node_ids(3)[..]);
+    assert_eq!(m.learners(), &[NodeId::new(3)]);
 
     let mut c = Cluster::new(4);
     let leader = c.run_until_leader();
-    assert!(m.voters.contains(&leader), "a voter leads, not the learner");
-    assert!(!c.nodes[&3].is_voter());
+    assert!(
+        m.voters().contains(&leader),
+        "a voter leads, not the learner"
+    );
+    assert!(!c.nodes[&NodeId::new(3)].is_voter());
 
     for i in 0..3u8 {
         c.propose(vec![i]);
     }
     // The learner replicated AND applied every committed entry...
-    assert_eq!(c.applied[&3], vec![vec![0], vec![1], vec![2]]);
+    assert_eq!(c.applied[&NodeId::new(3)], vec![vec![0], vec![1], vec![2]]);
     // ...yet it never left Follower (never campaigned).
-    assert_eq!(c.nodes[&3].role(), Role::Follower);
+    assert_eq!(c.nodes[&NodeId::new(3)].role(), Role::Follower);
 
     // The learner does NOT count toward quorum: drop two of three voters and no
     // leader can form (1 voter + 1 learner < majority of 2).
-    let voters_up: Vec<NodeId> = (0..3).filter(|v| *v != leader).collect();
+    let voters_up: Vec<NodeId> = node_ids(3).into_iter().filter(|v| *v != leader).collect();
     c.dropped.insert(leader);
     c.dropped.insert(voters_up[0]);
     for _ in 0..50 {
@@ -212,15 +222,16 @@ fn stale_leader_steps_down_on_higher_term() {
     let term = c.nodes[&leader].current_term();
     // Deliver a message from a future term.
     c.nodes.get_mut(&leader).unwrap().handle(
-        99,
+        NodeId::new(99),
         RaftMsg::AppendResp(AppendResp {
-            term: term + 5,
+            term: Term::new(term.get() + 5),
             success: false,
-            match_index: 0,
+            match_index: Index::new(0),
+            read_round: 0,
         }),
     );
     assert_eq!(c.nodes[&leader].role(), Role::Follower);
-    assert_eq!(c.nodes[&leader].current_term(), term + 5);
+    assert_eq!(c.nodes[&leader].current_term(), Term::new(term.get() + 5));
 }
 
 #[test]
@@ -244,7 +255,7 @@ fn relay_engines_converge_across_failover() {
     // Replay each survivor's committed commands into a fresh relay engine and
     // assert they all hold the identical message set.
     let mut sets = Vec::new();
-    for id in (0..3).filter(|id| *id != old) {
+    for id in node_ids(3).into_iter().filter(|id| *id != old) {
         let engine = Relay::new(RelayCoreConfig::in_memory());
         for raw in &c.applied[&id] {
             let v: serde_json::Value = serde_json::from_slice(raw).unwrap();
@@ -261,5 +272,133 @@ fn relay_engines_converge_across_failover() {
     }
     assert_eq!(sets[0], sets[1], "survivors' engines converge");
     assert_eq!(sets[0].len(), 7, "all 7 committed publishes applied");
+}
+
+#[test]
+fn in_process_raft_convergence() {
+    fn cmd(i: usize) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({ "id": format!("m{i}"), "v": i })).unwrap()
+    }
+
+    let mut c = Cluster::new(3);
+    let old_leader = c.run_until_leader();
+    let leaders: Vec<_> = c.nodes.values().filter(|n| n.is_leader()).collect();
+    assert_eq!(
+        leaders.len(),
+        1,
+        "node {old_leader} at index 0 is the sole leader"
+    );
+
+    // 4 publishes commit and every node's applied holds them in proposal order
+    for i in 0..4 {
+        c.propose(cmd(i));
+    }
+    for id in node_ids(3) {
+        assert_eq!(
+            c.applied[&id].len(),
+            4,
+            "node {id} at index 3 applied 4 entries before drop"
+        );
+        for (idx, raw) in c.applied[&id].iter().enumerate().take(4) {
+            assert_eq!(
+                raw,
+                &cmd(idx),
+                "node {id} at index {idx} holds message m{idx} in proposal order"
+            );
+        }
+    }
+
+    // The leader is dropped
+    c.dropped.insert(old_leader);
+
+    // A new leader different from the old one is elected
+    let new_leader = c.run_until_leader();
+    assert_ne!(
+        new_leader, old_leader,
+        "node {new_leader} replacing node {old_leader} at index 0"
+    );
+
+    // 3 more publishes commit
+    for i in 4..7 {
+        c.propose(cmd(i));
+    }
+
+    // No command committed before the drop is missing from, or reordered in, any survivor's applied
+    for id in node_ids(3).into_iter().filter(|id| *id != old_leader) {
+        assert_eq!(
+            c.applied[&id].len(),
+            7,
+            "node {id} at index 6 has all 7 applied entries"
+        );
+        for (idx, raw) in c.applied[&id].iter().enumerate().take(4) {
+            assert_eq!(
+                raw,
+                &cmd(idx),
+                "node {id} at index {idx} preserved pre-drop committed message m{idx}"
+            );
+        }
+        for (idx, raw) in c.applied[&id].iter().enumerate().skip(4).take(3) {
+            assert_eq!(
+                raw,
+                &cmd(idx),
+                "node {id} at index {idx} committed post-drop message m{idx}"
+            );
+        }
+    }
+
+    // Each survivor's applied is replayed into a fresh Relay::new(RelayCoreConfig::in_memory()),
+    // as relay_engines_converge_across_failover does. Both survivors return the same ids in the
+    // same order from entry("s", 0, seq), with log_len("s") == 7.
+    let mut survivor_logs = Vec::new();
+    for id in node_ids(3).into_iter().filter(|id| *id != old_leader) {
+        let engine = Relay::new(RelayCoreConfig::in_memory());
+        for (idx, raw) in c.applied[&id].iter().enumerate() {
+            let v: serde_json::Value = serde_json::from_slice(raw).unwrap();
+            let mid = v["id"].as_str().unwrap();
+            engine
+                .publish("s", mid, v.clone(), BTreeMap::new(), Utc::now())
+                .unwrap();
+            assert_eq!(
+                mid,
+                &format!("m{idx}"),
+                "node {id} at index {idx} replayed message {mid}"
+            );
+        }
+        let n = engine.log_len("s").unwrap();
+        assert_eq!(n, 7, "node {id} at index 6 has log_len 7");
+        let ids: Vec<String> = (0..n)
+            .map(|seq| {
+                let entry = engine.entry("s", 0, seq).unwrap().unwrap();
+                assert_eq!(
+                    entry.message_id,
+                    format!("m{seq}"),
+                    "node {id} at index {seq} has message id m{seq}"
+                );
+                entry.message_id
+            })
+            .collect();
+        survivor_logs.push((id, ids));
+    }
+
+    let (survivor_a, ids_a) = &survivor_logs[0];
+    let (survivor_b, ids_b) = &survivor_logs[1];
+    assert_eq!(
+        ids_a.len(),
+        7,
+        "node {survivor_a} at index 6 has 7 log entries"
+    );
+    assert_eq!(
+        ids_b.len(),
+        7,
+        "node {survivor_b} at index 6 has 7 log entries"
+    );
+    for idx in 0..7 {
+        assert_eq!(
+            ids_a[idx], ids_b[idx],
+            "node {survivor_a} and node {survivor_b} agree at index {idx} on message m{idx}"
+        );
+    }
+
+    println!("claim observed: in process raft convergence");
 }
 // HANDWRITE-END

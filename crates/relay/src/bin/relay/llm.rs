@@ -6,21 +6,21 @@
 
 /// This binary's identity + build provenance for the standard CLI ops
 /// (`upgrade` / `issue`), per the CONTRIBUTING.md CLI convention.
-pub const TOOL: cli_std::ToolInfo = cli_std::ToolInfo {
-    project: "relay",
-    repo: "faberline/relay",
-    target: env!("RELAY_TARGET"),
-    version: env!("CARGO_PKG_VERSION"),
-    git_sha: env!("RELAY_GIT_SHA"),
-    built_at: env!("RELAY_BUILT_AT"),
-};
+pub const TOOL: cli_std::ToolInfo = cli_std::ToolInfo::new(
+    "relay",
+    "faberline/relay",
+    env!("RELAY_TARGET"),
+    env!("CARGO_PKG_VERSION"),
+    env!("RELAY_GIT_SHA"),
+    env!("RELAY_BUILT_AT"),
+);
 
 /// relay's agent-facing `llm` topics — the single in-code source of truth.
 pub const TOPICS: &[cli_std::llm::Topic] = &[
-    cli_std::llm::Topic {
-        id: "http-api",
-        summary: "the HTTP/2 + OpenAPI work-queue surface (publish, consume, len, probes)",
-        body: "# relay — HTTP/2 API surface\n\n\
+    cli_std::llm::Topic::new(
+        "http-api",
+        "the HTTP/2 + OpenAPI work-queue surface (publish, consume, len, probes)",
+        "# relay — HTTP/2 API surface\n\n\
             One port speaks h2c (HTTP/2 cleartext, prior-knowledge). JSON bodies, plus an \
             `application/cbor` fast path on hot verbs. The payload is opaque JSON — relay \
             knows nothing about what it carries.\n\n\
@@ -34,11 +34,11 @@ pub const TOPICS: &[cli_std::llm::Topic] = &[
             - `GET /v1/{subject}/len` — current append count.\n\
             - `/healthz`, `/openapi.json` — probe + machine-readable contract.\n\n\
             The full document: `GET /openapi.json` (served by the binary).\n",
-    },
-    cli_std::llm::Topic {
-        id: "operations",
-        summary: "run / configure / deploy — flags, env vars, durability, k8s",
-        body: "# relay — operating the server\n\n\
+    ),
+    cli_std::llm::Topic::new(
+        "operations",
+        "run / configure / deploy — flags, env vars, durability, k8s",
+        "# relay — operating the server\n\n\
             Bare `relay` runs the server (env-driven; flags override). Key knobs:\n\n\
             - `--bind` (`RELAY_BIND`, default `0.0.0.0:7000`) — h2c listen address.\n\
             - `--data-dir` (`RELAY_DATA_DIR`) — durable log directory; group-commit fsync.\n\
@@ -106,31 +106,92 @@ pub const TOPICS: &[cli_std::llm::Topic] = &[
             exits nonzero). HONEST LIMIT: mTLS termination on the raft peer port \
             is not yet applied — raft-runtime's h2c transport has no TLS seam (filed \
             gap; peer RPCs stay cleartext h2c inside the cluster until it lands).\n",
-    },
+    ),
 ];
 // HANDWRITE-END
 
 /// `relay llm` flags.
-#[derive(clap::Args, Debug)]
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LlmArgs {
     /// Topic id (`outline` lists them all).
-    #[arg(default_value = "outline")]
-    pub(crate) topic: String,
+    #[arg(conflicts_with = "topic_flag")]
+    pub(crate) topic: Option<String>,
+    /// Topic id (`outline` lists them all).
+    #[arg(long = "topic", conflicts_with = "topic")]
+    pub(crate) topic_flag: Option<String>,
     /// Output format: `md` (default) or `json`.
     #[arg(long, default_value = "md")]
     pub(crate) format: String,
 }
 
+impl LlmArgs {
+    pub(crate) fn resolved_topic(&self) -> &str {
+        self.topic
+            .as_deref()
+            .or(self.topic_flag.as_deref())
+            .unwrap_or("outline")
+    }
+}
+
 /// `relay llm` — print agent-facing topics. Offline: no engine, no server,
 /// no I/O beyond stdout.
 pub(crate) fn run(args: LlmArgs) -> anyhow::Result<()> {
+    let topic = args.resolved_topic();
     let out = cli_std::llm::render(
-        TOOL.project,
-        TOOL.version,
+        TOOL.project(),
+        TOOL.version(),
         TOPICS,
-        &args.topic,
+        topic,
         cli_std::llm::Format::parse(&args.format),
     )?;
     println!("{out}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn topics_render_and_ids_are_unique_and_match_expected() {
+        cli_std::llm::assert_topics_render(TOPICS);
+
+        let ids: Vec<&str> = TOPICS.iter().map(|t| t.id()).collect();
+        let unique_ids: HashSet<&str> = ids.iter().copied().collect();
+        assert_eq!(ids.len(), unique_ids.len(), "topic ids must be unique");
+
+        let mut expected = vec!["http-api", "operations"];
+        expected.sort();
+        let mut actual = ids;
+        actual.sort();
+        assert_eq!(
+            actual, expected,
+            "topic ids must be exactly http-api and operations"
+        );
+    }
+
+    #[test]
+    fn llm_args_resolved_topic() {
+        let args = LlmArgs {
+            topic: None,
+            topic_flag: None,
+            format: "md".to_string(),
+        };
+        assert_eq!(args.resolved_topic(), "outline");
+
+        let args = LlmArgs {
+            topic: Some("operations".to_string()),
+            topic_flag: None,
+            format: "md".to_string(),
+        };
+        assert_eq!(args.resolved_topic(), "operations");
+
+        let args = LlmArgs {
+            topic: None,
+            topic_flag: Some("operations".to_string()),
+            format: "md".to_string(),
+        };
+        assert_eq!(args.resolved_topic(), "operations");
+    }
 }

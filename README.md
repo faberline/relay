@@ -64,7 +64,7 @@ dogfooded through a three-voter leader-kill suite on the GKE test cluster. Auto-
 downward-API env (`REPLICAS_PER_SHARD` > 1) flips replica mode.
 
 - Gate: `cargo test -p relay --test it -- raft_core:: raft_persistence:: raft_cluster::`
-- Dogfood: `tests/it/e2e/raft_failover.rs` on `k8s/overlays/gke-test` (`.github/workflows/gke-test.yml`)
+- Dogfood: `tests/it/e2e/raft_failover.rs` on `k8s/overlays/gke-test` (`.github/workflows/ci.yml`)
 - Source: `crates/relay-replication/src/raft.rs`, [`docs/ha.md`](docs/ha.md)
 
 ### Interface
@@ -123,6 +123,8 @@ and admin verbs (`--out`, `relay backup`, `relay issue …`,
 
 ### Operations
 
+Start with [docs/operations/install.md](docs/operations/install.md); the operator runbook is [docs/operations/runbook.md](docs/operations/runbook.md).
+
 #### Kubernetes-native deployment
 
 An operator-rendered StatefulSet with downward-API env auto-mode reads, offline
@@ -165,7 +167,8 @@ engine.
 - Behavior: `bash scripts/ec-evidence.sh security-behavior`
 - Boundaries: `bash scripts/ec-evidence.sh security-boundaries`
 - Stability: `bash scripts/ec-evidence.sh security-stability`
-- Static + runtime scan: `vat run guard-security`
+- Runtime evidence (auth, admission, peer mTLS, direct Kubernetes, reload): `vat run security-evidence`
+- Static supply-chain check: `aw security check` (standard S10, warning only)
 
 #### Stateful service workload
 

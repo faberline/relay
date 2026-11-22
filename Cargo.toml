@@ -11,9 +11,9 @@ members = ["crates/*"]
 # relay releases independently (relay@<version> tags). Every member inherits
 # this version; the release scripts and workflows read the first column-0
 # `version = "` line of this file.
-version = "0.4.13"
+version = "0.5.0"
 edition = "2021"
-authors = ["Chris Cheng <chris.cheng.c4@gmail.com>"]
+authors = ["Faberline contributors"]
 license = "MIT"
 repository = "https://github.com/faberline/relay"
 
@@ -29,18 +29,19 @@ relay-shared-kernel = { path = "crates/relay-shared-kernel" }
 relay-storage = { path = "crates/relay-storage" }
 
 # faberline/core building blocks.
-build-stamp = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-cli-std = { git = "https://github.com/faberline/core", tag = "v0.4.14", default-features = false }
-metrics-prometheus = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-openapi-codegen = { git = "https://github.com/faberline/core", tag = "v0.4.14", version = "0.5" }
-peer-tls = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-raft-core = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-raft-runtime = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-service-auth = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-service-backup = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-service-http = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-service-k8s = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
-transport-h2c = { git = "https://github.com/faberline/core", tag = "v0.4.14" }
+build-stamp = { git = "https://github.com/faberline/core", tag = "v0.5.2" }
+cli-std = { git = "https://github.com/faberline/core", tag = "v0.5.2", default-features = false }
+metrics-prometheus = { git = "https://github.com/faberline/core", tag = "v0.5.2" }
+openapi-codegen = { git = "https://github.com/faberline/core", tag = "v0.5.2", version = "0.5" }
+peer-tls = { git = "https://github.com/faberline/core", tag = "v0.5.2" }
+raft-core = { git = "https://github.com/faberline/core", tag = "v0.5.2" }
+raft-runtime = { git = "https://github.com/faberline/core", tag = "v0.5.2" }
+service-auth = { git = "https://github.com/faberline/core", tag = "v0.5.2" }
+service-backup = { git = "https://github.com/faberline/core", tag = "v0.5.2" }
+service-http = { git = "https://github.com/faberline/core", tag = "v0.5.2" }
+service-k8s = { git = "https://github.com/faberline/core", tag = "v0.5.2" }
+storage-durable = { git = "https://github.com/faberline/core", tag = "v0.5.2" }
+transport-h2c = { git = "https://github.com/faberline/core", tag = "v0.5.2" }
 
 # Third-party. kube-rs versions mirror the other faberline users so the
 # lockfile stays single-versioned.
@@ -60,16 +61,18 @@ rcgen = "0.13"
 redis = { version = "0.27", features = ["tokio-comp"] }
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "system-proxy", "rustls-tls-native-roots", "json", "cookies", "gzip", "brotli", "multipart", "stream"] }
 rustls = "0.23"
+rustls-pemfile = "2"
 schemars = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 serde_yaml = "0.9"
 tempfile = "3"
+proptest = "1"
 tokio = { version = "1.40", features = ["full"] }
 tower = "0.5"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-utoipa = "4"
+utoipa = "5"
 
 [profile.release]
 opt-level = 3

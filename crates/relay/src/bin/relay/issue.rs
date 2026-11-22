@@ -22,6 +22,8 @@ pub(crate) enum IssueCommand {
     View(IssueViewArgs),
     /// File a structured issue (auto-tagged `app:relay`).
     Create(IssueCreateArgs),
+    /// Comment on an issue.
+    Comment(IssueCommentArgs),
 }
 
 /// `relay issue search [query] [--state] [--limit]` flags.
@@ -59,6 +61,25 @@ pub(crate) struct IssueCreateArgs {
     pub(crate) message: Vec<String>,
 }
 
+/// `relay issue comment <number> [message...] [--repo <owner/name>] [--dry-run] [-y|--yes]` flags.
+#[derive(clap::Args, Debug)]
+pub(crate) struct IssueCommentArgs {
+    /// Issue number.
+    pub(crate) number: u64,
+    /// Target repository (`owner/name`).
+    #[arg(long)]
+    pub(crate) repo: Option<String>,
+    /// Print what would be commented without sending it.
+    #[arg(long)]
+    pub(crate) dry_run: bool,
+    /// Skip confirmation prompt.
+    #[arg(short = 'y', long)]
+    pub(crate) yes: bool,
+    /// Comment body.
+    #[arg(num_args = 0..)]
+    pub(crate) message: Vec<String>,
+}
+
 /// `relay issue <verb>` — dispatch search/view/create to cli-std. `create`
 /// always tags `app:relay`; `search` is filtered to relay's own issues.
 pub(crate) async fn run(args: IssueArgs) -> Result<()> {
@@ -68,11 +89,10 @@ pub(crate) async fn run(args: IssueArgs) -> Result<()> {
             let query = (!joined.trim().is_empty()).then_some(joined);
             cli_std::issue::search(
                 &TOOL,
-                cli_std::issue::SearchOptions {
-                    query,
-                    state: m.state,
-                    limit: m.limit,
-                },
+                cli_std::issue::SearchOptions::default()
+                    .with_query(query)
+                    .with_state(m.state)
+                    .with_limit(m.limit),
             )
             .await
         }
@@ -90,17 +110,50 @@ pub(crate) async fn run(args: IssueArgs) -> Result<()> {
             let message = (!msg.trim().is_empty()).then_some(msg);
             cli_std::issue::create(
                 &TOOL,
-                cli_std::issue::CreateOptions {
-                    title,
-                    message,
-                    url: None,
-                    repo: None,
-                    label: vec!["app:relay".to_string()],
-                    dry_run: m.dry_run,
-                    yes: true,
-                },
+                cli_std::issue::CreateOptions::new(title)
+                    .with_message(message)
+                    .with_label(vec!["app:relay".to_string()])
+                    .with_dry_run(m.dry_run)
+                    .with_yes(true),
             )
             .await
         }
+        IssueCommand::Comment(m) => {
+            let msg = m.message.join(" ");
+            let message = (!msg.trim().is_empty()).then_some(msg);
+            let opts = cli_std::issue::CommentOptions::try_new(m.number)?
+                .with_message(message)
+                .with_repo(m.repo)
+                .with_dry_run(m.dry_run)
+                .with_yes(m.yes);
+            cli_std::issue::comment(&TOOL, opts).await
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_comment_zero() {
+        // Issue 0 is rejected when the options are built, before `comment` runs.
+        let res = cli_std::issue::CommentOptions::try_new(0);
+        assert!(res.is_err(), "comment(0) should be err, got: {:?}", res);
+    }
+
+    #[tokio::test]
+    async fn test_comment_dry_run() {
+        let opts = cli_std::issue::CommentOptions::try_new(123)
+            .expect("123 is a valid issue number")
+            .with_message("still broken".to_string())
+            .with_dry_run(true)
+            .with_yes(true);
+        let res = cli_std::issue::comment(&TOOL, opts).await;
+        assert!(
+            res.is_ok(),
+            "comment dry run should succeed, got: {:?}",
+            res
+        );
     }
 }

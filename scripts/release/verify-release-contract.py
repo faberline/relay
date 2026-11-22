@@ -36,7 +36,6 @@ from typing import Callable, Dict, List, NoReturn, Optional, Sequence, Set, Tupl
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
-GKE_ACCEPTANCE = WORKFLOWS / "gke-acceptance.yml"
 RELEASE_DIR = ROOT / "scripts" / "release"
 APPS_SH = RELEASE_DIR / "apps.sh"
 RECEIPT_MAKER = RELEASE_DIR / "make-gke-release-receipt.py"
@@ -48,12 +47,13 @@ CLAUDE_SKILL = ROOT / ".claude" / "skills" / "build-release" / "SKILL.md"
 
 REPO = "faberline/relay"
 IMAGE_OWNER = "ghcr.io/faberline"
-GKE_HARNESS_APPS = ("keep", "defer", "relay", "loom")
-ACCEPTANCE_JOB = "deploy + verify on GKE"
-VERIFY_IMAGE_STEP = "Verify prebuilt image input"
-PREPARE_EVIDENCE_STEP = "Prepare evidence directory"
-HARNESS_STEP = "Run acceptance harness"
-PARK_STEP = "Park node pool (belt and suspenders)"
+VERIFY_INPUT_JOB = "Verify prebuilt image input"
+IDENTITY_JOB = "gke-acceptance: resolve image identity"
+ACCEPTANCE_JOB = "gke-acceptance: raft_failover / deploy + test on shared GKE"
+COUNT_JOB = "Fail when no acceptance test ran"
+DEPLOY_STEP = "Deploy, test, and tear down"
+UPLOAD_STEP = "Upload evidence"
+TEARDOWN_STEP = "Tear down (backup)"
 FIXTURE_BANNER = "LOCAL FIXTURE ONLY"
 
 # The skill's bytes are pinned: a change that keeps both copies equal (a
@@ -216,38 +216,6 @@ def job_block(text: str, job: str) -> str:
             end = index
             break
     return "\n".join(lines[start:end])
-
-
-def step_block(job_text: str, step_name: str) -> str:
-    lines = job_text.splitlines()
-    marker = f"- name: {step_name}"
-    starts = [index for index, line in enumerate(lines) if line.strip() == marker]
-    if len(starts) != 1:
-        fail(f"step {step_name!r} must appear exactly once, found {len(starts)}")
-    start = starts[0]
-    indent = len(lines[start]) - len(lines[start].lstrip())
-    end = len(lines)
-    for index in range(start + 1, len(lines)):
-        line = lines[index]
-        if line.strip() and (len(line) - len(line.lstrip())) <= indent and line.lstrip().startswith("- "):
-            end = index
-            break
-    return "\n".join(lines[start:end])
-
-
-def run_script(step_text: str) -> str:
-    lines = step_text.splitlines()
-    starts = [index for index, line in enumerate(lines) if line.strip() in ("run: |", "run: |-")]
-    if len(starts) != 1:
-        fail("step must carry exactly one block run script")
-    start = starts[0]
-    indent = len(lines[start]) - len(lines[start].lstrip())
-    body = []
-    for line in lines[start + 1:]:
-        if line.strip() and (len(line) - len(line.lstrip())) <= indent:
-            break
-        body.append(line)
-    return "\n".join(body)
 
 
 def all_run_scripts(text: str) -> List[str]:
@@ -530,57 +498,6 @@ def check_not_onboarded(app: App) -> None:
         fail(f"{path.relative_to(ROOT)} exists but {app.name} is still marked onboarded=False here")
 
 
-# --- static checks: gke-acceptance prebuilt image input ---------------------
-
-
-def env_line(app: str) -> str:
-    return f"{app.upper()}_IMAGE: ${{{{ contains(inputs.apps, '{app}') && inputs.image || needs.build-{app}.outputs.image }}}}"
-
-
-def build_gate(app: str) -> str:
-    return f"if: contains(inputs.apps, '{app}') && inputs.image == ''"
-
-
-def check_gke_acceptance(text: str) -> None:
-    label = "gke-acceptance"
-    if workflow_triggers(text) != ["workflow_dispatch"]:
-        fail(f"{label}: the only trigger must be workflow_dispatch, got {workflow_triggers(text)}")
-    if workflow_inputs(text) != {"apps", "ref", "image"}:
-        fail(f"{label}: inputs must be apps, ref, image, got {sorted(workflow_inputs(text))}")
-    if not re.search(r"^run-name: .*inputs\.image != ''.*image=\{0\}", text, re.M):
-        fail(f"{label}: run-name must carry the prebuilt image so release.sh can tell the runs apart")
-    expected_jobs = {f"build-{app}" for app in GKE_HARNESS_APPS} | {"acceptance"}
-    if job_ids(text) != expected_jobs:
-        fail(f"{label}: jobs must be {sorted(expected_jobs)}, got {sorted(job_ids(text))}")
-    for app in GKE_HARNESS_APPS:
-        if build_gate(app) not in job_block(text, f"build-{app}"):
-            fail(f"{label}: build-{app} must be skipped when a prebuilt image is given")
-    acceptance = job_block(text, "acceptance")
-    if f"name: {ACCEPTANCE_JOB}" not in acceptance:
-        fail(f"{label}: the acceptance job must be named {ACCEPTANCE_JOB!r}")
-    for app in GKE_HARNESS_APPS:
-        if env_line(app) not in acceptance:
-            fail(f"{label}: {app.upper()}_IMAGE must prefer the prebuilt image for a selected app")
-    verify = step_block(acceptance, VERIFY_IMAGE_STEP)
-    if "if: inputs.image != ''" not in verify:
-        fail(f"{label}: {VERIFY_IMAGE_STEP!r} must run whenever a prebuilt image is given")
-    if acceptance.index(f"- name: {VERIFY_IMAGE_STEP}") > acceptance.index(f"- name: {PREPARE_EVIDENCE_STEP}"):
-        fail(f"{label}: {VERIFY_IMAGE_STEP!r} must run before any cluster work")
-    script = run_script(verify)
-    for required in (
-        '[ "${#apps[@]}" -eq 1 ]',
-        "@sha256:[0-9a-f]{64}$",
-        "${OWNER}",
-        "${app}",
-    ):
-        if required not in script:
-            fail(f"{label}: {VERIFY_IMAGE_STEP!r} must check {required!r}")
-    if "OWNER: ${{ github.repository_owner }}" not in verify:
-        fail(f"{label}: the image owner must come from github.repository_owner")
-    for step in (HARNESS_STEP, PARK_STEP):
-        step_block(acceptance, step)
-
-
 # --- cross-checks: apps.sh, the receipt maker, release.sh --------------------
 
 
@@ -673,9 +590,12 @@ def check_tables(maker) -> None:
         ("REPOSITORY", REPO),
         ("IMAGE_OWNER", IMAGE_OWNER),
         ("ACCEPTANCE_JOB", ACCEPTANCE_JOB),
-        ("VERIFY_IMAGE_STEP", VERIFY_IMAGE_STEP),
-        ("HARNESS_STEP", HARNESS_STEP),
-        ("PARK_STEP", PARK_STEP),
+        ("VERIFY_INPUT_JOB", VERIFY_INPUT_JOB),
+        ("IDENTITY_JOB", IDENTITY_JOB),
+        ("COUNT_JOB", COUNT_JOB),
+        ("DEPLOY_STEP", DEPLOY_STEP),
+        ("UPLOAD_STEP", UPLOAD_STEP),
+        ("TEARDOWN_STEP", TEARDOWN_STEP),
     ):
         if getattr(maker, attribute, None) != expected:
             fail(f"receipt maker {attribute} = {getattr(maker, attribute, None)!r}, expected {expected!r}")

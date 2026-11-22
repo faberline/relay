@@ -1,0 +1,385 @@
+# CI stages: lint -> test -> e2e -> gate.
+# See https://github.com/faberline/aw/blob/main/docs/standards/ci.md
+# The ruleset requires only the "gate" job. Keep its name fixed.
+#
+# relay on Faberline's shared GKE test cluster (faberline-test) runs in the
+# e2e-* jobs. faberline/aw's reusable gke-test workflow deploys
+# k8s/overlays/gke-test (three raft voters) with the image under test on
+# pool-relay-server, runs one suite's test Job on pool-relay-client, uploads the
+# evidence artifact gke-test-evidence-<run_id>-<attempt>-<suite>, and tears the
+# namespace down. The test Job runs the Rust suite
+# crates/relay/tests/it/e2e/<suite>.rs from the relay-test-client image.
+#
+# Suites (aw docs/standards/test-cluster.md "Test suites"):
+#   raft_failover  k8s/gke-test-job/raft_failover
+#
+# Selection: on a pull request, test-select runs scripts/ci/select-gke.sh on the
+# changed paths; the e2e-* jobs are skipped when no changed path can affect the
+# GKE suite (cost control, aw docs/standards/cost-control.md rule 2). push to
+# main and workflow_dispatch run everything.
+#
+# GKE runs linux/amd64 only. aw owns the cluster, both pools, and the
+# gke-test-relay service account (infra/gke-test/pools.yaml in faberline/aw);
+# nothing here creates cloud resources.
+#
+# Images, both from the same commit:
+#   ghcr.io/faberline/relay:sha-<git12>              relay-test-image.yml (server)
+#   ghcr.io/faberline/relay-test-client:sha-<git12>  the test-client job below
+# Both are pinned by digest before the run.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: "lint: fmt, clippy"
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: 1.99.1
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: relay-ci
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny --version 0.19.0
+      - name: Dependency audit
+        run: cargo deny check advisories bans licenses sources
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: 0.12.1
+          enable-cache: false
+      - name: Release contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --python 3.13 --no-project scripts/release/verify-release-contract.py --app relay
+          uv run --python 3.13 --no-project scripts/release/verify-release-contract.py --self-test
+          uv run --python 3.13 --no-project scripts/release/make-gke-release-receipt.py --self-test
+      - name: Selection rule test
+        run: bash scripts/ci/select-gke.test.sh
+      - name: Security check (S10, warning only)
+        continue-on-error: true
+        run: |
+          cargo install --locked --git https://github.com/faberline/aw --rev df440b3884f52569a2facf1eecdb12275ae77c33 aw
+          aw security check --dir .
+
+  test-workspace:
+    name: "test: workspace"
+    needs: [lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: relay-ci
+      - name: Test
+        run: cargo test --locked --workspace
+
+  test-features:
+    name: "test: all features"
+    needs: [lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: 1.99.1
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: relay-ci
+      - name: Clippy, all features
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Test, all features
+        # The release gate builds default features; --all-features adds the
+        # operator and backup tests it does not reach.
+        run: cargo test --locked --workspace --all-features
+
+  test-coverage:
+    name: "test: workspace, coverage"
+    needs: [lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: 1.99.1
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: relay-ci
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: cargo-llvm-cov@0.9.1
+      - name: Measure coverage
+        run: cargo llvm-cov --workspace --locked --json --summary-only --output-path target/coverage.json
+      - uses: faberline/aw/.github/actions/coverage@4340a382c73351cffff85edba7079e4c24adf3db # S8
+        with:
+          summary: target/coverage.json
+
+  test-select:
+    name: "test: select GKE suites"
+    needs: [lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      gke: ${{ steps.select.outputs.gke }}
+      reason: ${{ steps.select.outputs.reason }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Select
+        id: select
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+            git diff --name-only --no-renames "$base" "$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+          else
+            : > "$RUNNER_TEMP/changed.txt"
+          fi
+          bash scripts/ci/select-gke.sh < "$RUNNER_TEMP/changed.txt" | tee -a "$GITHUB_OUTPUT"
+          {
+            echo "### GKE selection"
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/changed.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  e2e-image:
+    name: "e2e: build server image"
+    needs: [test-workspace, test-features, test-select]
+    if: needs.test-select.outputs.gke == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/relay-test-image.yml
+
+  e2e-test-client:
+    name: "e2e: build test-client image"
+    needs: [test-workspace, test-features, test-select]
+    if: needs.test-select.outputs.gke == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.digest.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: 1.99.1
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: relay-test-client-x86_64-unknown-linux-musl
+
+      # The suites only talk HTTP and run kubectl, so the test binary needs no
+      # crate feature; musl makes it fit the static base image.
+      - name: Build the test binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe="$(cargo test --release --locked --target x86_64-unknown-linux-musl \
+              -p relay --test it --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and .target.name == "it") | .executable')"
+          [[ -n "$exe" && -x "$exe" ]] || { echo "::error::no test binary for it"; exit 1; }
+          mkdir -p dist/linux/amd64
+          cp "$exe" dist/linux/amd64/relay-it
+
+      - name: Resolve image tag
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          git12="$(git rev-parse HEAD | cut -c1-12)"
+          echo "tag=ghcr.io/${{ github.repository_owner }}/relay-test-client:sha-${git12}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push the test-client image
+        id: push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.test
+          target: test-client
+          platforms: linux/amd64
+          push: true
+          # NEVER add `latest` or a semver tag here — dev/test line only.
+          tags: ${{ steps.ver.outputs.tag }}
+
+      - name: Record pushed digest
+        id: digest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad digest: $DIGEST"; exit 1; }
+          echo "image=ghcr.io/${{ github.repository_owner }}/relay-test-client@${DIGEST}" >> "$GITHUB_OUTPUT"
+
+  e2e-resolve:
+    name: "e2e: resolve image identity"
+    needs: [e2e-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      image: ${{ steps.identity.outputs.image }}
+      test-env: ${{ steps.identity.outputs.test_env }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Pin the image and its expected identity
+        id: identity
+        shell: bash
+        env:
+          RAW_IMAGE: ${{ needs.e2e-image.outputs.image }}
+        run: |
+          set -euo pipefail
+          die() { echo "::error::$*" >&2; exit 1; }
+          [[ "$RAW_IMAGE" =~ ^ghcr\.io/faberline/relay:sha-([0-9a-f]{12})@(sha256:[0-9a-f]{64})$ ]] \
+            || die "image must be ghcr.io/faberline/relay:sha-<git12>@sha256:<64 hex>, got: $RAW_IMAGE"
+          git_sha="${BASH_REMATCH[1]:0:8}"
+          root_digest="${BASH_REMATCH[2]}"
+          image="ghcr.io/faberline/relay@${root_digest}"
+
+          version="$(grep '^version = ' Cargo.toml | head -n1 | cut -d'"' -f2)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || die "invalid version: $version"
+
+          # relay-test-image.yml pushes one linux/amd64 image. buildx may still
+          # wrap it in an index (attestations); then the amd64 child is what
+          # the node pulls. A plain manifest runs as the root digest itself.
+          raw="$(docker buildx imagetools inspect --raw "$image")"
+          if jq -e '.manifests? | type == "array"' <<<"$raw" >/dev/null; then
+            runtime_digest="$(jq -r '
+              [.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest] |
+              if length == 1 then .[0] else empty end' <<<"$raw")"
+          else
+            runtime_digest="$root_digest"
+          fi
+          [[ "$runtime_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || die "no single linux/amd64 digest for $image"
+
+          {
+            echo "image=${image}"
+            echo "test_env<<EOF"
+            echo "E2E_EXPECTED_VERSION=${version}"
+            echo "E2E_EXPECTED_GIT_SHA=${git_sha}"
+            echo "E2E_EXPECTED_IMAGE=${image}"
+            echo "E2E_EXPECTED_RUNTIME_DIGEST=${runtime_digest}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### relay ci e2e identity"
+            echo
+            echo '```text'
+            echo "image:          ${image}"
+            echo "version:        ${version}"
+            echo "git_sha:        ${git_sha}"
+            echo "runtime_digest: ${runtime_digest}"
+            echo "suite:          raft_failover"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  e2e-raft-failover:
+    name: "e2e: raft_failover"
+    needs: [e2e-resolve, e2e-test-client, test-select]
+    if: needs.test-select.outputs.gke == 'true'
+    permissions:
+      id-token: write
+      contents: read
+      packages: read
+    uses: faberline/aw/.github/workflows/gke-test.yml@efe1a96e54617e60f6e2b7d154aea67fca8c96f8
+    with:
+      aw-ref: efe1a96e54617e60f6e2b7d154aea67fca8c96f8
+      image: ${{ needs.e2e-resolve.outputs.image }}
+      image-name: ghcr.io/faberline/relay
+      namespace: relay
+      test-job: k8s/gke-test-job/raft_failover
+      test-image: ${{ needs.e2e-test-client.outputs.image }}
+      test-image-name: relay-test-client
+      test-env: ${{ needs.e2e-resolve.outputs.test-env }}
+      evidence-suffix: raft_failover
+
+  gate:
+    name: gate
+    if: always()
+    needs: [lint, test-workspace, test-features, test-coverage, test-select, e2e-image, e2e-test-client, e2e-resolve, e2e-raft-failover]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check every stage
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e '.lint.result == "success"' > /dev/null
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")' > /dev/null
+          echo "$RESULTS" | jq -e '."test-select".result == "success"' > /dev/null
+          gke="$(echo "$RESULTS" | jq -r '."test-select".outputs.gke')"
+          reason="$(echo "$RESULTS" | jq -r '."test-select".outputs.reason')"
+          if [[ "$gke" == "true" ]]; then
+            echo "$RESULTS" | jq -e '."e2e-raft-failover".result == "success"' > /dev/null
+          else
+            echo "e2e-raft-failover: skipped-by-selection ($reason)"
+          fi

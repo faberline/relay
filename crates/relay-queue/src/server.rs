@@ -21,6 +21,7 @@
 //! handler authorizes on its `{subject}` via [`relay_access::auth::authorize`] —
 //! publish family = write, consume family = read.
 
+use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -309,11 +310,21 @@ fn encode_body<T: serde::Serialize>(cbor: bool, status: StatusCode, value: &T) -
     }
 }
 
+/// Map an engine `io::Result<T>` to `Result<T, Response>`, mapping `Err` to
+/// HTTP 500 with error code `internal` through [`ApiErr`].
+#[allow(clippy::result_large_err)]
+fn engine<T>(r: io::Result<T>) -> Result<T, Response> {
+    r.map_err(|e| {
+        ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()).into_response()
+    })
+}
+
 /// `POST /v1/{subject}/publish` — append a message (idempotent on message_id).
 #[utoipa::path(
     post,
     path = "/v1/{subject}/publish",
     params(("subject" = String, Path, description = "Target subject")),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
     responses((status = 200, description = "Append outcome { seq, deduped }"))
 )]
 pub async fn publish(
@@ -409,6 +420,7 @@ async fn propose_publish(
     post,
     path = "/v1/{subject}/publish-batch",
     params(("subject" = String, Path, description = "Target subject")),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
     responses((status = 200, description = "One append outcome per message, in order"))
 )]
 pub async fn publish_batch(
@@ -472,6 +484,7 @@ pub async fn publish_batch(
     post,
     path = "/v1/{subject}/lease",
     params(("subject" = String, Path, description = "Target subject")),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
     responses((status = 200, description = "A lease, or null when nothing is available"))
 )]
 pub async fn lease(
@@ -503,13 +516,17 @@ pub async fn lease(
             }
         }
     } else {
-        st.relay
-            .lease(&subject, &req.consumer_id, now)
-            .unwrap_or(None)
+        match engine(st.relay.lease(&subject, &req.consumer_id, now)) {
+            Ok(lease) => lease,
+            Err(resp) => return resp,
+        }
     };
     // Attach the leased entry body so the consumer knows what it leased (#166).
     let entry = match &lease {
-        Some(l) => st.relay.entry(&l.subject, l.shard, l.seq).unwrap_or(None),
+        Some(l) => match engine(st.relay.entry(&l.subject, l.shard, l.seq)) {
+            Ok(entry) => entry,
+            Err(resp) => return resp,
+        },
         None => None,
     };
     encode_body(cbor, StatusCode::OK, &LeaseResponse { lease, entry })
@@ -520,6 +537,7 @@ pub async fn lease(
     post,
     path = "/v1/{subject}/ack",
     params(("subject" = String, Path, description = "Target subject")),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
     responses((status = 200, description = "Ack result { acked, committed_seq }"))
 )]
 pub async fn ack(
@@ -561,10 +579,11 @@ pub async fn ack(
             }
         }
     } else {
-        let acked = st
-            .relay
-            .ack(&subject, &req.lease_id, req.epoch)
-            .unwrap_or(false);
+        let acked = match engine(st.relay.ack(&subject, &req.lease_id, req.epoch)) {
+            Ok(acked) => acked,
+            Err(resp) => return resp,
+        };
+        // Best-effort extra field: committed offset lookup failure does not invalidate the ack.
         let committed = st
             .relay
             .committed_offset(&subject)
@@ -588,6 +607,7 @@ pub async fn ack(
     post,
     path = "/v1/{subject}/lease-batch",
     params(("subject" = String, Path, description = "Target subject")),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
     responses((status = 200, description = "Up to max leases in seq order"))
 )]
 pub async fn lease_batch(
@@ -622,9 +642,13 @@ pub async fn lease_batch(
             }
         }
     } else {
-        st.relay
-            .lease_batch(&subject, &req.consumer_id, req.max, now)
-            .unwrap_or_default()
+        match engine(
+            st.relay
+                .lease_batch(&subject, &req.consumer_id, req.max, now),
+        ) {
+            Ok(leases) => leases,
+            Err(resp) => return resp,
+        }
     };
     encode_body(cbor, StatusCode::OK, &LeaseBatchResponse { leases })
 }
@@ -634,6 +658,7 @@ pub async fn lease_batch(
     post,
     path = "/v1/{subject}/ack-batch",
     params(("subject" = String, Path, description = "Target subject")),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
     responses((status = 200, description = "Count accepted + committed offset"))
 )]
 pub async fn ack_batch(
@@ -681,7 +706,10 @@ pub async fn ack_batch(
             .into_iter()
             .map(|a| (a.lease_id, a.epoch))
             .collect();
-        st.relay.ack_batch(&subject, &acks).unwrap_or((0, None))
+        match engine(st.relay.ack_batch(&subject, &acks)) {
+            Ok(result) => result,
+            Err(resp) => return resp,
+        }
     };
     encode_body(
         cbor,
@@ -698,6 +726,7 @@ pub async fn ack_batch(
     post,
     path = "/v1/{subject}/heartbeat",
     params(("subject" = String, Path, description = "Target subject")),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
     responses((status = 200, description = "Heartbeat result { extended, expires_at }"))
 )]
 pub async fn heartbeat(
@@ -732,9 +761,10 @@ pub async fn heartbeat(
             }
         }
     } else {
-        st.relay
-            .heartbeat(&subject, &req.lease_id, req.epoch, now)
-            .unwrap_or(None)
+        match engine(st.relay.heartbeat(&subject, &req.lease_id, req.epoch, now)) {
+            Ok(expires_at) => expires_at,
+            Err(resp) => return resp,
+        }
     };
     encode_body(
         cbor,
@@ -767,7 +797,7 @@ pub async fn admin_backup(
     }
     let applied = match st.raft() {
         Some(raft) => raft.applied_index(),
-        None => 0,
+        None => Default::default(),
     };
     match relay_replication::raft::snapshot_bytes(&st.relay, applied) {
         Ok(bytes) => (
@@ -806,6 +836,28 @@ pub async fn log_len(
         ),
         Err(e) => ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string())
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn engine_helper_maps_error_to_500_internal_and_passes_ok() {
+        let ok_result: io::Result<&str> = Ok("success");
+        assert_eq!(engine(ok_result).unwrap(), "success");
+
+        let err_result: io::Result<&str> = Err(io::Error::other("storage engine failed"));
+        let resp = engine(err_result).unwrap_err();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read response body");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("parse json");
+        assert_eq!(json["error"], "internal");
+        assert_eq!(json["message"], "storage engine failed");
     }
 }
 // HANDWRITE-END
