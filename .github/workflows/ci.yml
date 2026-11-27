@@ -81,7 +81,7 @@ jobs:
       - name: Security check (S10, warning only)
         continue-on-error: true
         run: |
-          cargo install --locked --git https://github.com/faberline/aw --rev df440b3884f52569a2facf1eecdb12275ae77c33 aw
+          cargo install --locked --git https://github.com/faberline/aw --rev df50599e6e52e6459d3b40450a02b4333cd5f50c aw
           aw security check --dir .
 
   test-workspace:
@@ -140,7 +140,7 @@ jobs:
           tool: cargo-llvm-cov@0.9.1
       - name: Measure coverage
         run: cargo llvm-cov --workspace --locked --json --summary-only --output-path target/coverage.json
-      - uses: faberline/aw/.github/actions/coverage@4340a382c73351cffff85edba7079e4c24adf3db # S8
+      - uses: faberline/aw/.github/actions/coverage@df50599e6e52e6459d3b40450a02b4333cd5f50c # S8
         with:
           summary: target/coverage.json
 
@@ -349,9 +349,9 @@ jobs:
       id-token: write
       contents: read
       packages: read
-    uses: faberline/aw/.github/workflows/gke-test.yml@efe1a96e54617e60f6e2b7d154aea67fca8c96f8
+    uses: faberline/aw/.github/workflows/gke-test.yml@df50599e6e52e6459d3b40450a02b4333cd5f50c
     with:
-      aw-ref: efe1a96e54617e60f6e2b7d154aea67fca8c96f8
+      aw-ref: df50599e6e52e6459d3b40450a02b4333cd5f50c
       image: ${{ needs.e2e-resolve.outputs.image }}
       image-name: ghcr.io/faberline/relay
       namespace: relay
