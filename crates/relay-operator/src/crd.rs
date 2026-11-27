@@ -109,6 +109,7 @@ pub struct RelaySpec {
 pub struct RelayBackupSpec {
     /// Shared flat `schedule`, `destination`, and `retentionSecs` contract.
     #[serde(flatten)]
+    #[schemars(schema_with = "scheduled_backup_policy_schema")]
     pub policy: service_backup::ScheduledBackupPolicy,
     /// Name of a Secret whose `token` key holds a bearer token with `admin`
     /// on `*`, injected into the CronJob as `RELAY_BACKUP_TOKEN`. Needed when
@@ -172,5 +173,62 @@ pub fn crd_yaml() -> String {
     service_k8s::crd::normalize_unsigned_integer_formats(&mut crd);
     let yaml = serde_yaml::to_string(&crd).expect("CRD serializes");
     service_k8s::crd::quote_yaml_1_1_boolean_like_strings(&yaml)
+}
+
+/// `service_backup::ScheduledBackupPolicy` derives `schemars` 0.8 in `core`
+/// v0.5.3, while the CRD derive uses `schemars` 1. Describe its flat
+/// `schedule`, `destination` and `retentionSecs` fields here by hand.
+fn scheduled_backup_policy_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "required": ["destination", "schedule"],
+        "properties": {
+            "schedule": {
+                "type": "string",
+                "description": "Cron expression rendered into `CronJob.spec.schedule`."
+            },
+            "destination": {
+                "type": "string",
+                "description": "Destination URI accepted by `BackupDestination::from_uri`."
+            },
+            "retentionSecs": {
+                "type": ["integer", "null"],
+                "format": "uint64",
+                "minimum": 0,
+                "description": "Drop objects older than this many seconds after a successful put. `None` keeps every object."
+            }
+        }
+    })
+}
+
+#[cfg(test)]
+mod backup_schema_tests {
+    use super::crd_yaml;
+
+    /// The hand-written backup policy schema keeps the flat fields and their
+    /// required list in the rendered CRD (the default build runs this, so the
+    /// coverage ratchet sees the schema function).
+    #[test]
+    fn backup_policy_schema_keeps_flat_fields() {
+        let doc: serde_yaml::Value = serde_yaml::from_str(&crd_yaml()).expect("CRD parses as YAML");
+        let backup = &doc["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
+            ["properties"]["backup"];
+        let props = &backup["properties"];
+
+        assert_eq!(props["schedule"]["type"].as_str(), Some("string"));
+        assert_eq!(props["destination"]["type"].as_str(), Some("string"));
+        assert_eq!(props["retentionSecs"]["type"].as_str(), Some("integer"));
+        assert_eq!(props["retentionSecs"]["minimum"].as_f64(), Some(0.0));
+        assert!(props.get("policy").is_none(), "policy must be flattened");
+
+        let required: Vec<&str> = backup["required"]
+            .as_sequence()
+            .expect("backup schema has a required list")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(required.contains(&"schedule"));
+        assert!(required.contains(&"destination"));
+    }
 }
 // HANDWRITE-END
