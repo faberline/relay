@@ -200,4 +200,35 @@ fn scheduled_backup_policy_schema(_: &mut schemars::SchemaGenerator) -> schemars
         }
     })
 }
+
+#[cfg(test)]
+mod backup_schema_tests {
+    use super::crd_yaml;
+
+    /// The hand-written backup policy schema keeps the flat fields and their
+    /// required list in the rendered CRD (the default build runs this, so the
+    /// coverage ratchet sees the schema function).
+    #[test]
+    fn backup_policy_schema_keeps_flat_fields() {
+        let doc: serde_yaml::Value = serde_yaml::from_str(&crd_yaml()).expect("CRD parses as YAML");
+        let backup = &doc["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
+            ["properties"]["backup"];
+        let props = &backup["properties"];
+
+        assert_eq!(props["schedule"]["type"].as_str(), Some("string"));
+        assert_eq!(props["destination"]["type"].as_str(), Some("string"));
+        assert_eq!(props["retentionSecs"]["type"].as_str(), Some("integer"));
+        assert_eq!(props["retentionSecs"]["minimum"].as_f64(), Some(0.0));
+        assert!(props.get("policy").is_none(), "policy must be flattened");
+
+        let required: Vec<&str> = backup["required"]
+            .as_sequence()
+            .expect("backup schema has a required list")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(required.contains(&"schedule"));
+        assert!(required.contains(&"destination"));
+    }
+}
 // HANDWRITE-END
