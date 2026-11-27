@@ -109,6 +109,7 @@ pub struct RelaySpec {
 pub struct RelayBackupSpec {
     /// Shared flat `schedule`, `destination`, and `retentionSecs` contract.
     #[serde(flatten)]
+    #[schemars(schema_with = "scheduled_backup_policy_schema")]
     pub policy: service_backup::ScheduledBackupPolicy,
     /// Name of a Secret whose `token` key holds a bearer token with `admin`
     /// on `*`, injected into the CronJob as `RELAY_BACKUP_TOKEN`. Needed when
@@ -172,5 +173,31 @@ pub fn crd_yaml() -> String {
     service_k8s::crd::normalize_unsigned_integer_formats(&mut crd);
     let yaml = serde_yaml::to_string(&crd).expect("CRD serializes");
     service_k8s::crd::quote_yaml_1_1_boolean_like_strings(&yaml)
+}
+
+/// `service_backup::ScheduledBackupPolicy` derives `schemars` 0.8 in `core`
+/// v0.5.3, while the CRD derive uses `schemars` 1. Describe its flat
+/// `schedule`, `destination` and `retentionSecs` fields here by hand.
+fn scheduled_backup_policy_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "required": ["destination", "schedule"],
+        "properties": {
+            "schedule": {
+                "type": "string",
+                "description": "Cron expression rendered into `CronJob.spec.schedule`."
+            },
+            "destination": {
+                "type": "string",
+                "description": "Destination URI accepted by `BackupDestination::from_uri`."
+            },
+            "retentionSecs": {
+                "type": ["integer", "null"],
+                "format": "uint64",
+                "minimum": 0,
+                "description": "Drop objects older than this many seconds after a successful put. `None` keeps every object."
+            }
+        }
+    })
 }
 // HANDWRITE-END
