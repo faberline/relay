@@ -129,6 +129,50 @@ fn crd_flattens_cluster_spec() {
     );
 }
 
+/// The backup policy is flattened into `spec.backup`: its `schedule`,
+/// `destination` and `retentionSecs` fields sit directly under `backup`, with
+/// no nested `policy` wrapper, and the policy's required fields stay required.
+#[test]
+fn crd_backup_policy_keeps_flat_fields() {
+    let yaml = crd_yaml();
+    let doc: serde_yaml::Value = serde_yaml::from_str(&yaml).expect("CRD parses as YAML");
+    let backup = &doc["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
+        ["properties"]["backup"];
+    let props = &backup["properties"];
+
+    for field in [
+        "schedule",
+        "destination",
+        "retentionSecs",
+        "adminTokenSecret",
+    ] {
+        assert!(
+            props.get(field).is_some(),
+            "backup schema must carry flattened field `{field}`"
+        );
+    }
+    assert_eq!(props["schedule"]["type"].as_str(), Some("string"));
+    assert_eq!(props["retentionSecs"]["type"].as_str(), Some("integer"));
+    assert_eq!(props["retentionSecs"]["minimum"].as_f64(), Some(0.0));
+
+    let required: Vec<&str> = backup["required"]
+        .as_sequence()
+        .expect("backup schema has a `required` list")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert!(required.contains(&"schedule"), "`schedule` is required");
+    assert!(
+        required.contains(&"destination"),
+        "`destination` is required"
+    );
+
+    assert!(
+        props.get("policy").is_none(),
+        "the backup policy must be flattened, not nested under `policy`"
+    );
+}
+
 /// R2 / AC3 — the rendered StatefulSet carries exactly the downward-API env
 /// relay's serve reads, the right replica count (single group), relay's
 /// runtime env + disk tier, the probe contract, and the sibling child objects.
